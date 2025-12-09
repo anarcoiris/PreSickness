@@ -68,6 +68,24 @@ class ETLConfig:
     # Procesamiento de texto
     language: str = "es"
     min_message_length: int = 3  # Ignorar mensajes muy cortos
+    target_sender: Optional[str] = None  # Filtrar solo mensajes de este sender
+    include_counterparts: bool = True  # Incluir mensajes de contrapartes
+    
+    # Patrones de sistema a filtrar
+    system_patterns: List[str] = field(default_factory=lambda: [
+        r"<Multimedia omitido>",
+        r"Los mensajes y las llamadas están cifrados",
+        r"Se editó este mensaje",
+        r"Eliminaste este mensaje",
+        r"es un contacto",
+        r"cambió el código de seguridad",
+        r"imagen omitida",
+        r"audio omitido",
+        r"video omitido",
+        r"sticker omitido",
+        r"GIF omitido",
+        r"documento omitido",
+    ])
     
     # Agregación
     aggregation_freq: str = "D"  # Diario
@@ -808,11 +826,36 @@ class ETLPipeline:
         # ═══ TRANSFORM ═══
         logger.info("=== FASE TRANSFORM ===")
         
+        # Filtrar mensajes de sistema (multimedia omitido, etc.)
+        initial_count = len(messages_df)
+        for pattern in self.config.system_patterns:
+            messages_df = messages_df[~messages_df["text"].str.contains(pattern, case=False, na=False, regex=True)]
+        
+        filtered_count = initial_count - len(messages_df)
+        if filtered_count > 0:
+            logger.info(f"Mensajes de sistema filtrados: {filtered_count}")
+        
+        # Filtrar por target_sender si está configurado
+        if self.config.target_sender:
+            if self.config.include_counterparts:
+                # Marcar mensajes del target vs contrapartes
+                messages_df["is_target"] = messages_df["sender"] == self.config.target_sender
+                logger.info(f"Mensajes del paciente ({self.config.target_sender}): {messages_df['is_target'].sum()}")
+                logger.info(f"Mensajes de contrapartes: {(~messages_df['is_target']).sum()}")
+            else:
+                # Solo mantener mensajes del target
+                messages_df = messages_df[messages_df["sender"] == self.config.target_sender]
+                messages_df["is_target"] = True
+                logger.info(f"Filtrado a mensajes del paciente: {len(messages_df)}")
+        else:
+            messages_df["is_target"] = True
+        
         # Extraer features por mensaje
         message_features = []
         for _, row in messages_df.iterrows():
             features = self.feature_extractor.extract_message_features(row)
             if features:
+                features["is_target"] = row.get("is_target", True)
                 message_features.append(features)
         
         features_df = pd.DataFrame(message_features)
@@ -928,6 +971,17 @@ def main():
         default="es",
         help="Idioma de los mensajes",
     )
+    parser.add_argument(
+        "--target-sender", "-t",
+        type=str,
+        default=None,
+        help="Marcador del paciente principal (ej: '<?>')",
+    )
+    parser.add_argument(
+        "--no-counterparts",
+        action="store_true",
+        help="Excluir mensajes de contrapartes",
+    )
     
     args = parser.parse_args()
     
@@ -938,6 +992,8 @@ def main():
         patient_id=args.patient_id,
         export_format=args.format,
         language=args.language,
+        target_sender=args.target_sender,
+        include_counterparts=not args.no_counterparts,
     )
     
     pipeline = ETLPipeline(config)

@@ -1,0 +1,87 @@
+{
+  "data_path": "data\\processed\\paciente1",
+  "target": "relapse_in_14d",
+  "samples": 840,
+  "features": 15,
+  "positive_rate": 0.9523809523809523,
+  "models": {
+    "LogisticRegression": {
+      "auroc": 0.2344,
+      "auprc": 0.9487,
+      "brier_score": 0.0638
+    },
+    "RandomForest": {
+      "auroc": 0.508,
+      "auprc": 0.9713,
+      "brier_score": 0.052
+    },
+    "GradientBoosting": {
+      "auroc": 0.3049,
+      "auprc": 0.9587,
+      "brier_score": 0.0323
+    }
+  },
+  "best_model": "RandomForest",
+  "feature_importance": [
+    {
+      "feature": "coverage",
+      "importance": 0.17769433365209664
+    },
+    {
+      "feature": "sentiment_std",
+      "importance": 0.15421402672992943
+    },
+    {
+      "feature": "words_mean",
+      "importance": 0.15130879995596141
+    },
+    {
+      "feature": "ttr_mean",
+      "importance": 0.08779734539692034
+    },
+    {
+      "feature": "words_total",
+      "importance": 0.07457784335685688
+    },
+    {
+      "feature": "messages_mean",
+      "importance": 0.05716858128271877
+    },
+    {
+      "feature": "active_hours_mean",
+      "importance": 0.05610771386007785
+    },
+    {
+      "feature": "night_ratio_mean",
+      "importance": 0.04952929340835481
+    },
+    {
+      "feature": "messages_total",
+      "importance": 0.04251788600585518
+    },
+    {
+      "feature": "sentiment_mean",
+      "importance": 0.041351486413482436
+    },
+    {
+      "feature": "num_active_days",
+      "importance": 0.034524185304537346
+    },
+    {
+      "feature": "messages_std",
+      "importance": 0.02572217156911111
+    },
+    {
+      "feature": "window_size_days",
+      "importance": 0.016350139636500213
+    },
+    {
+      "feature": "sentiment_trend",
+      "importance": 0.01588509110832576
+    },
+    {
+      "feature": "messages_trend",
+      "importance": 0.015251102319271799
+    }
+  ]
+}

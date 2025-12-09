@@ -1,0 +1,29 @@
+{
+  "results": {
+    "rf": {
+      "auroc": 0.6196,
+      "auprc": 0.3293
+    },
+    "gbm": {
+      "auroc": 0.6851,
+      "auprc": 0.3557
+    },
+    "logreg": {
+      "auroc": 0.1526,
+      "auprc": 0.1626
+    },
+    "voting_soft": {
+      "auroc": 0.6045,
+      "auprc": 0.3263
+    },
+    "stacking": {
+      "auroc": 0.4437,
+      "auprc": 0.238
+    },
+    "manual_avg": {
+      "auroc": 0.6611,
+      "auprc": 0.3485
+    }
+  },
+  "best": "gbm"
+}

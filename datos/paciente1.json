@@ -1,0 +1,38 @@
+{
+    "patient_id": "paciente1",
+    "patient_marker": "<?>",
+    "counterparts": [
+        "Santi"
+    ],
+    "description": "Paciente con Esclerosis Múltiple, comunicación via WhatsApp",
+    "data_source": "whatsapp_export",
+    "language": "es",
+    "data_range": {
+        "start": "2024-07-19",
+        "end": "2025-12-09"
+    },
+    "events": [
+        {
+            "date": "2024-12-21",
+            "event_type": "relapse",
+            "severity": "moderate",
+            "notes": "Brote mencionado en la conversación - 'me empezó un brote otra vez y me frustre'"
+        }
+    ],
+    "notes": [
+        "El paciente menciona tratamiento experimental que falló (0.01%)",
+        "Preocupación por deterioro cognitivo",
+        "Menciona uso de clonazepam",
+        "Diagnóstico autoinmune confirmado en la conversación"
+    ],
+    "message_filters": {
+        "system_patterns": [
+            "<Multimedia omitido>",
+            "Los mensajes y las llamadas están cifrados",
+            "Se editó este mensaje",
+            "Eliminaste este mensaje",
+            "es un contacto"
+        ],
+        "min_message_length": 3
+    }
+}
