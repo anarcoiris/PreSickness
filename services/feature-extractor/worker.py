@@ -62,12 +62,25 @@ class FeatureExtractor:
         if self.db_pool:
             await self.db_pool.close()
 
-    def extract_text_features(self, text: str) -> Dict:
+    def extract_text_features(self, text: str, timestamp: Optional[datetime] = None) -> Dict:
+        """
+        Extrae features lingüísticas y de actividad de un texto.
+        
+        Mejoras:
+        - Tokenización mejorada para español (maneja ¿¡ y abreviaturas)
+        - Features de actividad temporal
+        - Soporte bilingüe (ES/EN)
+        """
         if not text or not text.strip():
             return self._empty_text_features()
 
-        sentences = [s.strip() for s in text.split(".") if s.strip()]
-        words = text.split()
+        # Tokenización mejorada para español
+        sentences = self._tokenize_sentences(text)
+        words = self._tokenize_words(text)
+        
+        if not words:
+            return self._empty_text_features()
+        
         blob = TextBlob(text)
         sentiment = blob.sentiment.polarity
 
@@ -75,26 +88,107 @@ class FeatureExtractor:
         ttr = len(unique_words) / len(words) if words else 0
         avg_sentence_len = float(np.mean([len(s.split()) for s in sentences])) if sentences else 0
 
-        pronouns = {"i", "me", "my", "mine", "myself"}
+        # Pronombres bilingües (ES + EN)
+        pronouns_en = {"i", "me", "my", "mine", "myself"}
+        pronouns_es = {"yo", "me", "mi", "mí", "conmigo"}
+        pronouns = pronouns_en | pronouns_es
         pronoun_count = sum(1 for w in words if w.lower() in pronouns)
         pronoun_ratio = pronoun_count / len(words) if words else 0
 
-        future_markers = {"will", "gonna", "tomorrow", "next", "soon"}
-        past_markers = {"was", "were", "had", "yesterday", "ago"}
+        # Marcadores temporales bilingües
+        future_markers = {"will", "gonna", "tomorrow", "next", "soon", 
+                         "mañana", "próximo", "luego", "después", "pronto"}
+        past_markers = {"was", "were", "had", "yesterday", "ago",
+                       "ayer", "antes", "pasado", "fue", "era"}
 
         future_count = sum(1 for w in words if w.lower() in future_markers)
         past_count = sum(1 for w in words if w.lower() in past_markers)
+        
+        # Features de estilo
+        exclamation_count = text.count("!") + text.count("¡")
+        question_count = text.count("?") + text.count("¿")
+        ellipsis_count = text.count("...")
+        caps_ratio = sum(1 for c in text if c.isupper()) / len(text) if text else 0
+        
+        # Features temporales (si se proporciona timestamp)
+        ts = timestamp or datetime.utcnow()
+        hour = ts.hour
+        day_of_week = ts.weekday()
+        is_night = 1 if (hour < 6 or hour >= 23) else 0
+        is_weekend = 1 if day_of_week >= 5 else 0
 
         return {
+            # Features lingüísticas base
             "sentiment_score": float(sentiment),
             "avg_sentence_len": avg_sentence_len,
             "type_token_ratio": float(ttr),
             "word_count": len(words),
+            "sentence_count": len(sentences),
+            "char_count": len(text),
+            "avg_word_length": float(np.mean([len(w) for w in words])) if words else 0,
+            
+            # Pronombres y orientación temporal
             "pronoun_ratio": float(pronoun_ratio),
             "future_orientation": float(future_count / len(words)) if words else 0,
             "past_orientation": float(past_count / len(words)) if words else 0,
+            
+            # Estilo y expresividad
+            "exclamation_count": exclamation_count,
+            "question_count": question_count,
+            "ellipsis_count": ellipsis_count,
+            "caps_ratio": float(caps_ratio),
+            
+            # Features temporales
+            "hour": hour,
+            "day_of_week": day_of_week,
+            "is_night": is_night,
+            "is_weekend": is_weekend,
+            
             "extracted_at": datetime.utcnow().isoformat(),
         }
+    
+    def _tokenize_sentences(self, text: str) -> List[str]:
+        """
+        Tokenización de oraciones mejorada para español.
+        Maneja: ¿¡, abreviaturas comunes, puntos suspensivos.
+        """
+        import re
+        
+        # Proteger abreviaturas comunes
+        abbreviations = {
+            "Dr.": "Dr§", "Dra.": "Dra§", "Sr.": "Sr§", "Sra.": "Sra§",
+            "Lic.": "Lic§", "Ing.": "Ing§", "etc.": "etc§", "vs.": "vs§",
+            "p.ej.": "p§ej§", "i.e.": "i§e§", "e.g.": "e§g§",
+        }
+        protected = text
+        for abbr, replacement in abbreviations.items():
+            protected = protected.replace(abbr, replacement)
+        
+        # Proteger puntos suspensivos
+        protected = protected.replace("...", "§§§")
+        
+        # Separar por puntuación final
+        sentences = re.split(r'[.!?¡¿]+', protected)
+        
+        # Restaurar y limpiar
+        result = []
+        for s in sentences:
+            s = s.replace("§§§", "...").strip()
+            for abbr, replacement in abbreviations.items():
+                s = s.replace(replacement, abbr)
+            if s:
+                result.append(s)
+        
+        return result
+    
+    def _tokenize_words(self, text: str) -> List[str]:
+        """Tokenización de palabras básica."""
+        import re
+        # Eliminar URLs
+        text = re.sub(r'https?://\S+', '', text)
+        # Tokenizar por espacios y puntuación
+        words = re.findall(r'\b\w+\b', text.lower())
+        return words
 
     def _empty_text_features(self) -> Dict:
         return {
@@ -102,9 +196,20 @@ class FeatureExtractor:
             "avg_sentence_len": 0.0,
             "type_token_ratio": 0.0,
             "word_count": 0,
+            "sentence_count": 0,
+            "char_count": 0,
+            "avg_word_length": 0.0,
             "pronoun_ratio": 0.0,
             "future_orientation": 0.0,
             "past_orientation": 0.0,
+            "exclamation_count": 0,
+            "question_count": 0,
+            "ellipsis_count": 0,
+            "caps_ratio": 0.0,
+            "hour": 0,
+            "day_of_week": 0,
+            "is_night": 0,
+            "is_weekend": 0,
         }
 
     def compute_embedding(self, text: str) -> np.ndarray:
@@ -160,6 +265,15 @@ class FeatureExtractor:
             }
 
     async def compute_windowed_features(self, user_id_hash: str) -> Dict[int, Dict]:
+        """
+        Calcula features agregadas por ventana temporal.
+        
+        Incluye:
+        - Features lingüísticas (sentiment, TTR, longitud)
+        - Features de ACTIVIDAD (mensajes/día, horas activas, ratio nocturno)
+        - Features de salud (steps, sleep, HR)
+        - Tendencias temporales
+        """
         if not self.db_pool:
             raise RuntimeError("DB pool no inicializado")
         results: Dict[int, Dict] = {}
@@ -187,33 +301,117 @@ class FeatureExtractor:
                     row["numeric_features"] if isinstance(row["numeric_features"], dict) else json.loads(row["numeric_features"])
                     for row in rows
                 ]
+                timestamps = [row["time"] for row in rows]
 
                 def safe_list(values):
                     return [v for v in values if v is not None]
 
+                # Features lingüísticas base
                 sentiment_values = safe_list([f.get("sentiment_score") for f in numeric_features])
                 avg_sentence_values = safe_list([f.get("avg_sentence_len") for f in numeric_features])
                 ttr_values = safe_list([f.get("type_token_ratio") for f in numeric_features])
+                word_count_values = safe_list([f.get("word_count") for f in numeric_features])
+                
+                # Features de actividad
                 num_messages_values = safe_list([f.get("num_messages") for f in numeric_features])
                 latency_values = safe_list([f.get("avg_response_latency_sec") for f in numeric_features])
+                is_night_values = safe_list([f.get("is_night") for f in numeric_features])
+                hour_values = safe_list([f.get("hour") for f in numeric_features])
+                
+                # Features de salud
                 steps_values = safe_list([f.get("steps") for f in numeric_features])
                 sleep_values = safe_list([f.get("sleep_hours") for f in numeric_features])
                 hr_values = safe_list([f.get("hr_mean") for f in numeric_features])
+                
+                # Features de estilo
+                exclamation_values = safe_list([f.get("exclamation_count") for f in numeric_features])
+                question_values = safe_list([f.get("question_count") for f in numeric_features])
+                caps_ratio_values = safe_list([f.get("caps_ratio") for f in numeric_features])
+                
+                # === NUEVAS FEATURES DE ACTIVIDAD ===
+                
+                # Días únicos con actividad
+                unique_days = set(ts.date() for ts in timestamps)
+                num_active_days = len(unique_days)
+                coverage = num_active_days / window_days if window_days > 0 else 0
+                
+                # Horas únicas activas (promedio por día)
+                hours_per_day = {}
+                for ts in timestamps:
+                    day = ts.date()
+                    if day not in hours_per_day:
+                        hours_per_day[day] = set()
+                    hours_per_day[day].add(ts.hour)
+                active_hours_mean = float(np.mean([len(h) for h in hours_per_day.values()])) if hours_per_day else 0.0
+                
+                # Ratio nocturno (mensajes entre 23:00-06:00)
+                night_ratio = float(np.mean(is_night_values)) if is_night_values else 0.0
+                
+                # Gap máximo entre mensajes (en horas)
+                if len(timestamps) > 1:
+                    gaps = [(timestamps[i+1] - timestamps[i]).total_seconds() / 3600 
+                            for i in range(len(timestamps) - 1)]
+                    gap_max_hours = float(max(gaps))
+                    gap_mean_hours = float(np.mean(gaps))
+                else:
+                    gap_max_hours = 0.0
+                    gap_mean_hours = 0.0
+                
+                # Mensajes por día
+                messages_per_day = {}
+                for ts in timestamps:
+                    day = ts.date()
+                    messages_per_day[day] = messages_per_day.get(day, 0) + 1
+                messages_daily_values = list(messages_per_day.values())
+                messages_per_day_mean = float(np.mean(messages_daily_values)) if messages_daily_values else 0.0
+                messages_per_day_std = float(np.std(messages_daily_values)) if messages_daily_values else 0.0
+                
+                # Tendencia de actividad (slope de mensajes/día)
+                if len(messages_daily_values) >= 2:
+                    messages_trend = self._compute_trend(messages_daily_values)
+                else:
+                    messages_trend = 0.0
 
                 aggregated = {
                     "window_days": window_days,
                     "num_datapoints": len(rows),
+                    
+                    # Features lingüísticas
                     "sentiment_mean": float(np.mean(sentiment_values)) if sentiment_values else 0.0,
                     "sentiment_std": float(np.std(sentiment_values)) if sentiment_values else 0.0,
                     "sentiment_trend": self._compute_trend(sentiment_values),
                     "avg_sentence_len_mean": float(np.mean(avg_sentence_values)) if avg_sentence_values else 0.0,
                     "ttr_mean": float(np.mean(ttr_values)) if ttr_values else 0.0,
-                    "num_messages_total": int(sum(num_messages_values)) if num_messages_values else 0,
+                    "word_count_mean": float(np.mean(word_count_values)) if word_count_values else 0.0,
+                    "word_count_total": int(sum(word_count_values)) if word_count_values else 0,
+                    
+                    # Features de estilo
+                    "exclamation_mean": float(np.mean(exclamation_values)) if exclamation_values else 0.0,
+                    "question_mean": float(np.mean(question_values)) if question_values else 0.0,
+                    "caps_ratio_mean": float(np.mean(caps_ratio_values)) if caps_ratio_values else 0.0,
+                    
+                    # === FEATURES DE ACTIVIDAD (NUEVAS) ===
+                    "num_active_days": num_active_days,
+                    "coverage": float(coverage),
+                    "messages_per_day_mean": messages_per_day_mean,
+                    "messages_per_day_std": messages_per_day_std,
+                    "messages_trend": messages_trend,
+                    "active_hours_mean": active_hours_mean,
+                    "night_ratio": night_ratio,
+                    "gap_max_hours": gap_max_hours,
+                    "gap_mean_hours": gap_mean_hours,
+                    
+                    # Legacy (mantener compatibilidad)
+                    "num_messages_total": int(sum(num_messages_values)) if num_messages_values else len(rows),
                     "num_messages_mean": float(np.mean(num_messages_values)) if num_messages_values else 0.0,
                     "response_latency_mean": float(np.mean(latency_values)) if latency_values else 0.0,
+                    
+                    # Features de salud
                     "steps_mean": float(np.mean(steps_values)) if steps_values else 0.0,
                     "sleep_hours_mean": float(np.mean(sleep_values)) if sleep_values else 0.0,
                     "hr_mean": float(np.mean(hr_values)) if hr_values else 0.0,
+                    
+                    # Metadata temporal
                     "window_start": window_start.isoformat(),
                     "window_end": datetime.now(timezone.utc).isoformat(),
                     "computed_at": datetime.now(timezone.utc).isoformat(),
@@ -233,17 +431,43 @@ class FeatureExtractor:
         return {
             "window_days": window_days,
             "num_datapoints": 0,
+            
+            # Features lingüísticas
             "sentiment_mean": 0.0,
             "sentiment_std": 0.0,
             "sentiment_trend": 0.0,
             "avg_sentence_len_mean": 0.0,
             "ttr_mean": 0.0,
+            "word_count_mean": 0.0,
+            "word_count_total": 0,
+            
+            # Features de estilo
+            "exclamation_mean": 0.0,
+            "question_mean": 0.0,
+            "caps_ratio_mean": 0.0,
+            
+            # Features de actividad
+            "num_active_days": 0,
+            "coverage": 0.0,
+            "messages_per_day_mean": 0.0,
+            "messages_per_day_std": 0.0,
+            "messages_trend": 0.0,
+            "active_hours_mean": 0.0,
+            "night_ratio": 0.0,
+            "gap_max_hours": 0.0,
+            "gap_mean_hours": 0.0,
+            
+            # Legacy
             "num_messages_total": 0,
             "num_messages_mean": 0.0,
             "response_latency_mean": 0.0,
+            
+            # Features de salud
             "steps_mean": 0.0,
             "sleep_hours_mean": 0.0,
             "hr_mean": 0.0,
+            
+            # Metadata
             "window_start": datetime.now(timezone.utc).isoformat(),
             "window_end": datetime.now(timezone.utc).isoformat(),
             "computed_at": datetime.now(timezone.utc).isoformat(),

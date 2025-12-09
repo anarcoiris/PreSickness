@@ -1,0 +1,11 @@
+# ETL Pipeline - Dependencias
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0  # Para parquet
+torch>=2.0.0
+scikit-learn>=1.3.0
+
+# Opcional: mejor tokenización
+# spacy>=3.7.0
+# Instalar modelo: python -m spacy download es_core_news_sm
+

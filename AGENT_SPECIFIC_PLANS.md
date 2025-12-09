@@ -87,6 +87,14 @@ Este documento contiene los planes detallados ("precalentamientos") generados po
 - ¿Qué formato de datos necesitas para el entrenamiento? (CSV, Parquet, JSON?)
 - ¿Frecuencia de ingesta de datos? (Real-time vs Batch)
 
+**Progreso 02/12**
+- API Gateway implementado en `services/api-gateway` con autenticación + Kafka.
+- Worker de extracción y ventanas funcionando (`services/feature-extractor`).
+
+**Próximas 48h**
+- Instrumentar pruebas E2E de ingesta → ventanas.
+- Preparar contratos para servicio de inferencia y alert manager.
+
 ---
 
 ## 🧠 Agent ML (Brain) - Estrategia de Modelado
@@ -105,6 +113,13 @@ Este documento contiene los planes detallados ("precalentamientos") generados po
 **📝 Requisitos para Backus:**
 - Necesito acceso directo a una réplica de lectura de la DB o un dump diario en S3/MinIO.
 - Los logs de texto deben estar pre-procesados (limpieza básica) si es posible.
+
+**Progreso 02/12**
+- Script `train_tft.py` refactorizado con configuración declarativa y tracking MLflow.
+
+**Próximas 48h**
+- Ejecutar primer experimento completo y registrar métricas (AUROC, AUPRC).
+- Diseñar servicio `ml-inference` y definir serialización de modelos (TorchScript/ONNX).
 
 ---
 

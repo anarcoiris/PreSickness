@@ -2,6 +2,29 @@
 
 Guía para iniciar el desarrollo del prototipo en **menos de 30 minutos**.
 
+> **Última actualización:** 02/12/2025  
+> **Versión:** 0.2.0
+
+---
+
+## 📦 Estructura del Proyecto
+
+```
+em-predictor/
+├── services/
+│   ├── api-gateway/        # FastAPI - Ingesta de datos
+│   ├── feature-extractor/  # Worker de extracción de features
+│   ├── ml-inference/       # Servicio de predicción
+│   ├── alert-manager/      # Gestión de alertas
+│   └── dashboard/          # UI clínica (Streamlit)
+├── MiniLLM/                # Modelo de lenguaje local (opcional)
+├── monitoring/             # Prometheus + Grafana
+├── docs/                   # Documentación
+├── docker-compose.yml      # Orquestación de servicios
+├── db_schema.sql           # Schema de base de datos
+└── train_tft.py            # Pipeline de entrenamiento ML
+```
+
 ---
 
 ## 📋 Pre-requisitos
@@ -413,22 +436,78 @@ docker info | grep -i memory
 
 Una vez todo está corriendo:
 
-- **API Docs:** http://localhost:8000/docs
-- **MLflow:** http://localhost:5000
-- **MinIO Console:** http://localhost:9001 (user: minioadmin)
-- **Grafana:** http://localhost:3000 (admin/admin)
-- **Redpanda Console:** http://localhost:8080
+| Servicio | URL | Credenciales |
+|----------|-----|--------------|
+| **API Gateway (Docs)** | http://localhost:8000/docs | — |
+| **ML Inference (Docs)** | http://localhost:8001/docs | — |
+| **Alert Manager (Docs)** | http://localhost:8002/docs | — |
+| **Dashboard Clínico** | http://localhost:8501 | — |
+| **MLflow** | http://localhost:5000 | — |
+| **MinIO Console** | http://localhost:9001 | minioadmin / minioadmin123 |
+| **Grafana** | http://localhost:3000 | admin / admin |
+| **Redpanda Console** | http://localhost:8080 | — |
+
+---
+
+## 🚀 Comandos Rápidos
+
+### Levantar todo el stack
+
+```bash
+# Solo infraestructura (DB, Redis, Kafka, MLflow)
+docker-compose up -d postgres redis minio redpanda mlflow
+
+# Stack completo (incluye servicios)
+docker-compose up -d
+
+# Ver logs de un servicio
+docker-compose logs -f api_gateway
+```
+
+### Entrenar modelo
+
+```bash
+# Activar entorno virtual
+source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate     # Windows
+
+# Ejecutar entrenamiento
+python train_tft.py
+
+# Con parámetros personalizados (via .env o variables)
+DB_DSN=postgresql://... MLFLOW_URI=http://... python train_tft.py
+```
+
+### Dashboard local
+
+```bash
+cd services/dashboard
+pip install -r requirements.txt
+streamlit run app.py
+```
 
 ---
 
 ## 🎓 Próximos Pasos
 
-1. **Semana 1:** Completar API Gateway + Feature Extractor
-2. **Semana 2:** Generar dataset sintético de 30 días
-3. **Semana 3:** Entrenar primer modelo TFT
-4. **Semana 4:** Implementar inference service
+### Completados ✅
+- [x] API Gateway con autenticación y Kafka
+- [x] Feature Extractor con ventanas temporales
+- [x] Pipeline de entrenamiento TFT
+- [x] Servicio de inferencia ML
+- [x] Alert Manager con notificaciones
+- [x] Dashboard clínico básico
 
-**Documentación completa:** Ver `docs/architecture.md`
+### Pendientes 🔜
+- [ ] Integrar MiniLLM para features avanzadas (ver `docs/MINILLM_INTEGRATION_PLAN.md`)
+- [ ] Tests E2E del flujo completo
+- [ ] Configurar CI/CD con GitHub Actions
+- [ ] Deploy en staging
+
+**Documentación adicional:**
+- `docs/MINILLM_INTEGRATION_PLAN.md` - Plan de integración del LLM local
+- `AGENT_SPECIFIC_PLANS.md` - Planes detallados por agente
+- `project_timeline.md` - Timeline y presupuesto
 
 ---
 

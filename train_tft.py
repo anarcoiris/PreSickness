@@ -1,12 +1,20 @@
 """
 Training Pipeline para Temporal Fusion Transformer (TFT)
-Predice probabilidad de brote en horizontes de 7, 14, 30 días
+Predice probabilidad de brote en horizontes de 7, 14, 30 días.
+
+Responsables:
+- Agent ML (Brain): modelado y métricas
+- Agent Backend (Backus): suministro de datos y MLOps
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Tuple
-from datetime import datetime, timedelta
+from __future__ import annotations
+
+import asyncio
 import logging
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 import torch
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
@@ -17,11 +25,49 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 import mlflow
 import mlflow.pytorch
 
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_loss
+from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 import asyncpg
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+class TrainingSettings(BaseSettings):
+    """
+    Configuración centralizada para entrenamiento.
+    Permite override por variables de entorno o CLI (futuro).
+    """
+
+    db_dsn: str = Field(
+        default="postgresql://emuser:changeme@localhost/empredictor",
+        description="Cadena de conexión a la base de datos.",
+    )
+    mlflow_uri: str = Field(
+        default="http://localhost:5000",
+        description="URI del servidor MLflow.",
+    )
+    start_date: str = Field(
+        default="2024-01-01",
+        description="Fecha mínima de ventanas de features (YYYY-MM-DD).",
+    )
+    end_date: str = Field(
+        default=datetime.utcnow().strftime("%Y-%m-%d"),
+        description="Fecha máxima de ventanas de features.",
+    )
+    target_horizon: int = Field(default=14, description="Horizonte objetivo en días.")
+    max_encoder_length: int = Field(default=30)
+    max_prediction_length: int = Field(default=14)
+    experiment_name: str = Field(default="ms_relapse_tft")
+    batch_size: int = Field(default=32)
+    learning_rate: float = Field(default=1e-3)
+    max_epochs: int = Field(default=20)
+    hidden_size: int = Field(default=32)
+    attention_head_size: int = Field(default=4)
+    dropout: float = Field(default=0.1)
+    hidden_continuous_size: int = Field(default=16)
+
+    model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
 
 class MSRelapsePredictorDataset:
@@ -34,8 +80,8 @@ class MSRelapsePredictorDataset:
         
     async def load_data(
         self,
-        start_date: str = None,
-        end_date: str = None
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Carga datos de features + clinical events desde DB
@@ -349,63 +395,90 @@ class TFTTrainer:
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    
-    # Config
-    config = {
-        'db_dsn': 'postgresql://user:pass@localhost/empredictor',
-        'mlflow_uri': 'http://localhost:5000'
-    }
-    
-    # Load data
-    logger.info("Loading data...")
-    dataset_builder = MSRelapsePredictorDataset(config['db_dsn'])
-    df = await dataset_builder.load_data(
-        start_date='2024-01-01',
-        end_date='2024-12-31'
+    settings = TrainingSettings()
+    logger.info(
+        "Iniciando entrenamiento TFT (horizon=%sd, rango=%s→%s)",
+        settings.target_horizon,
+        settings.start_date,
+        settings.end_date,
     )
-    
-    logger.info(f"Dataset shape: {df.shape}")
-    logger.info(f"Positive rate (14d): {df['relapse_in_14d'].mean():.3f}")
-    
-    # Time-series split
-    unique_dates = df['date'].unique()
-    split_idx = int(len(unique_dates) * 0.8)
+
+    dataset_builder = MSRelapsePredictorDataset(settings.db_dsn)
+    df = await dataset_builder.load_data(
+        start_date=settings.start_date,
+        end_date=settings.end_date,
+    )
+
+    if df.empty:
+        logger.error("Dataset vacío. Verifica que existan feature_windows en la DB.")
+        return
+
+    target_col = f"relapse_in_{settings.target_horizon}d"
+    if target_col not in df.columns:
+        raise ValueError(
+            f"No existe la columna objetivo {target_col}. ¿Se computaron labels?"
+        )
+
+    positive_rate = float(df[target_col].mean()) if not df.empty else 0.0
+    logger.info(
+        "Dataset shape: %s, positive rate (%s): %.3f",
+        df.shape,
+        target_col,
+        positive_rate,
+    )
+
+    unique_dates = sorted(df["date"].unique())
+    if len(unique_dates) < 2:
+        logger.error("No hay suficientes timestamps para separar train/val.")
+        return
+
+    split_idx = max(1, int(len(unique_dates) * 0.8))
     train_dates = unique_dates[:split_idx]
     val_dates = unique_dates[split_idx:]
-    
-    train_df = df[df['date'].isin(train_dates)]
-    val_df = df[df['date'].isin(val_dates)]
-    
-    logger.info(f"Train: {len(train_df)}, Val: {len(val_df)}")
-    
-    # Prepare TFT datasets
+
+    train_df = df[df["date"].isin(train_dates)]
+    val_df = df[df["date"].isin(val_dates)]
+
+    if val_df.empty:
+        logger.warning("Split de validación vacío. Tomando el 10%% final del train.")
+        val_cut = max(1, int(len(train_df) * 0.1))
+        val_df = train_df.tail(val_cut)
+        train_df = train_df.iloc[:-val_cut]
+    if train_df.empty:
+        raise ValueError("Train dataset quedó vacío tras el split. Revisa fechas.")
+
+    logger.info("Registros -> train: %s, val: %s", len(train_df), len(val_df))
+
     train_dataset = dataset_builder.prepare_tft_dataset(
         train_df,
-        target_horizon=14,
-        max_encoder_length=30,
-        max_prediction_length=14
+        target_horizon=settings.target_horizon,
+        max_encoder_length=settings.max_encoder_length,
+        max_prediction_length=settings.max_prediction_length,
     )
-    
+
     val_dataset = TimeSeriesDataSet.from_dataset(
         train_dataset,
         val_df,
-        predict=True
+        predict=True,
+        stop_randomization=True,
     )
-    
-    # Train
-    logger.info("Starting training...")
-    trainer = TFTTrainer(config)
-    
-    model, metrics = trainer.train(
+
+    trainer = TFTTrainer({"mlflow_uri": settings.mlflow_uri})
+    logger.info("Entrenando modelo...")
+    _, metrics = trainer.train(
         train_dataset,
         val_dataset,
-        batch_size=32,
-        learning_rate=0.001,
-        max_epochs=20
+        experiment_name=settings.experiment_name,
+        batch_size=settings.batch_size,
+        learning_rate=settings.learning_rate,
+        max_epochs=settings.max_epochs,
+        hidden_size=settings.hidden_size,
+        attention_head_size=settings.attention_head_size,
+        dropout=settings.dropout,
+        hidden_continuous_size=settings.hidden_continuous_size,
     )
-    
-    logger.info("Training complete!")
-    logger.info(f"Final metrics: {metrics}")
+
+    logger.info("Entrenamiento finalizado. Métricas: %s", metrics)
 
 
 if __name__ == "__main__":

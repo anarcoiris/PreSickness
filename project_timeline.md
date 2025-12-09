@@ -20,6 +20,26 @@
 
 ---
 
+## ✅ Estado Operativo (Semana 6 - 02/12/2025)
+
+| Entrega | Responsable | Estado | Notas |
+|---------|-------------|--------|-------|
+| API Gateway (ingesta segura) | Backus | ✅ | FastAPI + Redis + Kafka en `services/api-gateway` |
+| Feature Extraction Worker | Backus & Brain | ✅ | Ventanas temporales en `feature_windows`, Kafka integrado |
+| Docker Compose base | Archie | ✅ | Postgres/Timescale, Redis, MinIO, Redpanda, MLflow |
+| Pipeline TFT (training script) | Brain | ✅ | `train_tft.py` con settings, split y MLflow tracking |
+| Servicio de inferencia | Brain & Archie | ✅ | `services/ml-inference` con heurística fallback |
+| Alert Manager | Backus | ✅ | `services/alert-manager` con scheduler y notificaciones |
+| Dashboard clínico | Droid | ✅ | `services/dashboard` Streamlit con métricas y alertas |
+| Plan MiniLLM | Brain | ✅ | `docs/MINILLM_INTEGRATION_PLAN.md` - Esperando dataset |
+
+**Siguientes pasos priorizados:**
+1. 🔜 Recibir dataset etiquetado del usuario para entrenar con datos reales.
+2. 🔜 Tests E2E del flujo ingesta → features → predicción → alerta.
+3. 🔜 Configurar CI/CD básico (GitHub Actions).
+
+---
+
 ## 🗓️ TIMELINE DETALLADO
 
 ### FASE 0: Preparación Legal y Técnica (Semanas 1-4)
