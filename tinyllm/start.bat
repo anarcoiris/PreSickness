@@ -1,0 +1,1 @@
+py -3.10 main.py train --tokenizer clean_tokenizer.json --data minillm_clean.txt --block-size 256 --batch-size 256 --epochs 20 --lr 1e-05 --n-layer 96 --outdir models
