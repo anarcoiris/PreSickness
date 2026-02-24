@@ -1,0 +1,45 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e5]:
+    - img [ref=e7]
+    - heading "Bienvenido a EM-Predictor" [level=1] [ref=e9]
+    - paragraph [ref=e10]: Inteligencia Artificial avanzada para la monitorización y predicción proactiva de brotes en Esclerosis Múltiple.
+    - generic [ref=e11]:
+      - generic [ref=e14]: Predicción TFT
+      - generic [ref=e17]: Análisis NLP
+      - generic [ref=e20]: Wearables Sync
+  - generic [ref=e23]:
+    - generic [ref=e24]:
+      - heading "Iniciar Sesión" [level=2] [ref=e25]
+      - paragraph [ref=e26]: Introduce tus credenciales para acceder al sistema
+    - generic [ref=e27]:
+      - generic [ref=e28]:
+        - generic [ref=e29]: Correo Electrónico
+        - generic [ref=e30]:
+          - img [ref=e31]
+          - textbox "ejemplo@medico.com" [ref=e34]
+      - generic [ref=e35]:
+        - generic [ref=e36]: Contraseña
+        - generic [ref=e37]:
+          - img [ref=e38]
+          - textbox "••••••••" [ref=e41]
+      - generic [ref=e42]:
+        - generic [ref=e43] [cursor=pointer]:
+          - checkbox "Recordar sesión"
+          - text: Recordar sesión
+        - link "¿Olvidaste tu contraseña?" [ref=e45] [cursor=pointer]:
+          - /url: "#"
+      - button "Acceder al Sistema" [ref=e46] [cursor=pointer]:
+        - text: Acceder al Sistema
+        - img [ref=e47]
+    - generic [ref=e49]: O accede con
+    - button "Google Google" [ref=e51] [cursor=pointer]:
+      - img "Google" [ref=e52]
+      - text: Google
+    - paragraph [ref=e53]:
+      - text: ¿No tienes una cuenta?
+      - link "Regístrate aquí" [ref=e54] [cursor=pointer]:
+        - /url: "#"
+```

@@ -2,6 +2,8 @@
 
 Sistema completo para entrenar modelos de lenguaje ligeros pero competentes en dominios específicos como ciencias, historia e historiografía.
 
+**Nota para PreSickness:** Este componente actúa como un extractor de features lingüísticas avanzadas (perplexity, entropy) para el motor de predicción de brotes de Esclerosis Múltiple. Ver `docs/MINILLM_INTEGRATION_PLAN.md` para más detalles.
+
 ## 🎯 Características Principales
 
 ### Arquitectura Mejorada

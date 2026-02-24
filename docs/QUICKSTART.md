@@ -1,141 +1,197 @@
 # Guía de Inicio Rápido
 
+> **Referencia**: [ROADMAP.md](ROADMAP.md) | [ARCHITECTURE.md](ARCHITECTURE.md)
+
 ## Requisitos
 
 - Python 3.10+
-- Docker Desktop (opcional, para servicios)
+- Node.js 18+ (para frontend)
+- Docker Desktop
 - 8GB RAM mínimo
 
-## Instalación
+---
+
+## 🚀 Inicio con Script (Recomendado)
 
 ```bash
-# Clonar repositorio
-git clone https://github.com/your-org/em-predictor.git
-cd em-predictor
-
-# Crear entorno virtual
-python -m venv venv
-venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
-
-# Instalar dependencias
-pip install -r requirements.txt
-pip install sentence-transformers optuna
+# Desde la raíz del proyecto
+start_all.bat
 ```
 
-## Procesar Primer Paciente
+Esto iniciará automáticamente:
+1. Contenedores Docker (Postgres, Redis, MLflow)
+2. Backend API (puerto 8080)
+3. NLP Agent (puerto 8002)
+4. ML Inference (puerto 8001)
+5. Frontend (puerto 5173)
 
-### 1. Preparar datos
-Coloca el export de WhatsApp en `datos/`:
+**Parar todo:**
+```bash
+stop_all.bat
+```
+
+---
+
+## 🛠️ Instalación Manual
+
+### 1. Instalar dependencias
+
+```bash
+# Backend
+pip install -r requirements.txt
+
+# Frontend
+cd services/webapp
+npm install
+```
+
+### 2. Iniciar Docker
+
+```bash
+# Levantar containers
+docker start em_postgres em_redis
+
+# O crear desde cero
+docker-compose up -d
+```
+
+### 3. Iniciar servicios
+
+```bash
+# Terminal 1: NLP Agent
+cd services/nlp-agent
+python main.py
+
+# Terminal 2: ML Inference
+cd services/ml-inference
+python main.py
+
+# Terminal 3: Backend API
+cd services/unified_app
+python main.py --port 8080
+
+# Terminal 4: Frontend
+cd services/webapp
+npm run dev
+```
+
+---
+
+## 📍 URLs de Servicios
+
+| Servicio | URL |
+|----------|-----|
+| **Frontend** | http://localhost:5173 |
+| **API Docs** | http://localhost:8080/docs |
+| **NLP Health** | http://localhost:8002/health |
+| **MLflow** | http://localhost:5000 |
+
+---
+
+## 📤 Procesar Datos de Paciente
+
+### 1. Subir archivo WhatsApp
+
+Coloca el export en `datos/`:
 ```
 datos/paciente1_whatsapp.txt
 ```
 
-### 2. Extraer eventos clínicos
-```bash
-python scripts/etl/extract_events.py datos/paciente1_whatsapp.txt --output datos/paciente1_events.csv
-```
-
-### 3. Ejecutar ETL
-```bash
-python -m scripts.etl.pipeline \
-  --input datos/paciente1_whatsapp.txt \
-  --events datos/paciente1_events.csv \
-  --patient-id paciente1 \
-  --output data/processed/ \
-  --target-sender "<?>"
-```
-
-### 4. Generar clusters de brote
-```bash
-python scripts/etl/cluster_signals.py \
-  --input datos/paciente1_events.csv \
-  --output datos/paciente1_clusters.csv
-```
-
-### 5. Regenerar labels
-```bash
-python scripts/etl/regenerate_labels.py \
-  --data-path data/processed/paciente1 \
-  --clusters datos/paciente1_clusters.csv
-```
-
-## Entrenar Modelo
-
-### Opción A: Pipeline completo
-```bash
-python scripts/ml/run_full_pipeline.py --data-path data/processed/paciente1
-```
-
-### Opción B: Paso a paso
-```bash
-# Feature engineering
-python scripts/ml/feature_engineering.py --data-path data/processed/paciente1
-
-# Optimización Optuna
-python scripts/ml/optuna_simple.py --data-path data/processed/paciente1 --n-trials 30
-
-# Ensemble
-python scripts/ml/ensemble_model.py --data-path data/processed/paciente1
-```
-
-## Visualizar Resultados
+### 2. Via API (recomendado)
 
 ```bash
-# Evolution temporal
-python scripts/ml/plot_features_timeseries.py --data-path data/processed/paciente1
+# Login
+curl -X POST http://localhost:8080/api/auth/login \
+  -d "username=tu@email.com&password=password"
 
-# Walk-forward validation
-python scripts/ml/walk_forward_validation.py --data-path data/processed/paciente1
+# Subir archivo
+curl -X POST http://localhost:8080/api/patients/upload \
+  -H "Authorization: Bearer TOKEN" \
+  -F "file=@datos/paciente1_whatsapp.txt"
 ```
 
-## Servicios Docker (Opcional)
+### 3. Via Frontend
+
+1. Ir a http://localhost:5173
+2. Login como paciente
+3. Configuración → Subir datos
+
+---
+
+## 🔮 Obtener Predicción
+
+### Via API
 
 ```bash
-# Levantar todos los servicios
-docker-compose up -d
-
-# Ver logs
-docker-compose logs -f
-
-# Parar
-docker-compose down
+curl -X POST http://localhost:8080/api/predict \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"horizon_days": 14}'
 ```
 
-### URLs de Servicios
-
-| Servicio | URL |
-|----------|-----|
-| API Gateway | http://localhost:8000 |
-| MLflow | http://localhost:5000 |
-| Grafana | http://localhost:3000 |
-| MinIO | http://localhost:9001 |
-
-## Estructura de Salida
-
-```
-data/processed/paciente1/
-├── daily_features.parquet          # Features por día
-├── window_features.parquet         # Features por ventana
-├── training_dataset.parquet        # Dataset original
-├── training_dataset_clusters.parquet   # Con labels de clusters
-├── training_dataset_engineered.parquet # Con feature engineering
-├── walk_forward_results.csv        # Resultados CV temporal
-├── optuna_results.json             # Mejores hiperparámetros
-├── ensemble_results.json           # Comparativa de modelos
-└── *.png                           # Plots generados
+**Respuesta:**
+```json
+{
+  "probability": 0.439,
+  "risk_level": "warning",
+  "horizon_days": 14,
+  "generated_at": "2026-02-07T20:41:57Z"
+}
 ```
 
-## Troubleshooting
+### Via Frontend
 
-### Error: "No se encontraron mensajes del paciente"
-- Verifica que `--target-sender` coincide con el nombre en el export
-- En español, el sender del usuario suele ser `<?>`
+Dashboard → Botón "Calcular Predicción"
 
-### Error: "Dataset vacío"
-- Verifica formato del archivo WhatsApp (debe ser `DD/MM/YYYY, HH:MM - Nombre: Mensaje`)
-- Revisa que hay mensajes en el rango de fechas
+---
 
-### Error: "AUROC bajo (< 0.5)"
-- Verifica balance de labels (ideal 15-40% positivos)
-- Usa `regenerate_labels.py` con clusters en lugar de eventos individuales
+## 🔧 Troubleshooting
+
+### Error: "Connection refused" en puerto 8080
+```bash
+# Verificar que el backend está corriendo
+netstat -ano | findstr ":8080"
+
+# Reiniciar backend
+cd services/unified_app
+python main.py --port 8080
+```
+
+### Error: "MLflow connection failed"
+```bash
+# Iniciar MLflow
+docker start mlflow
+
+# O crear container
+docker run -d -p 5000:5000 --name mlflow python:3.10-slim \
+  bash -c "pip install mlflow && mlflow server --host 0.0.0.0"
+```
+
+### Error: "No module found"
+```bash
+pip install -r services/unified_app/requirements.txt
+pip install -r services/nlp-agent/requirements.txt
+```
+
+---
+
+## 📊 Verificar Sistema
+
+```bash
+python test_system.py
+```
+
+**Salida esperada:**
+```
+=== PREDICTION TEST ===
+Status: 200
+probability: 0.43, risk_level: warning
+
+=== SERVICES STATUS ===
+unified_app: OK (200)
+nlp-agent: OK (200)
+ml-inference: OK (404)
+mlflow: OK (200)
+postgres: OK
+redis: OK
+```

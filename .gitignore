@@ -26,3 +26,11 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Project Specific
+datos/
+data/
+uploads/
+*.parquet
+*.log
+client_secret_*.json

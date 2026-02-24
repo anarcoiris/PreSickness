@@ -58,11 +58,13 @@ def walk_forward_validation(
     train_window: int = 60,  # días de entrenamiento
     test_window: int = 14,   # días de test
     step: int = 7,           # avance por iteración
+    gap: int = 0,            # NUEVO: embargo entre train y test
+    purge: int = 0,          # NUEVO: días a purgar del final de train
     model_class=RandomForestClassifier,
     model_params: Dict = None,
 ) -> pd.DataFrame:
     """
-    Ejecuta walk-forward validation.
+    Ejecuta walk-forward validation con gap (embargo) y purge.
     
     Args:
         df: DataFrame con features y target
@@ -71,6 +73,8 @@ def walk_forward_validation(
         train_window: Días para entrenar
         test_window: Días para evaluar
         step: Días para avanzar ventana
+        gap: Días de embargo entre fin de train y inicio de test
+        purge: Días a eliminar del final de train (sus labels miran hacia test)
         model_class: Clase del modelo
         model_params: Parámetros del modelo
     
@@ -88,18 +92,30 @@ def walk_forward_validation(
     print(f"\n📊 Walk-Forward Validation")
     print(f"   Train window: {train_window} días")
     print(f"   Test window: {test_window} días")
+    print(f"   Gap (embargo): {gap} días")
+    print(f"   Purge: {purge} días")
     print(f"   Step: {step} días")
     print(f"   Total fechas: {len(dates)}")
     
     fold = 0
     start_idx = 0
     
-    while start_idx + train_window + test_window <= len(dates):
+    # Calcular espacio total necesario por iteración
+    total_needed = train_window + gap + test_window
+    
+    while start_idx + total_needed <= len(dates):
+        # Calcular índices con gap y purge
         train_end_idx = start_idx + train_window
-        test_end_idx = train_end_idx + test_window
         
-        train_dates = dates[start_idx:train_end_idx]
-        test_dates = dates[train_end_idx:test_end_idx]
+        # Purge: eliminar últimos 'purge' días del train
+        train_end_idx_purged = train_end_idx - purge if purge > 0 else train_end_idx
+        
+        # Gap: test comienza después del embargo
+        test_start_idx = train_end_idx + gap
+        test_end_idx = test_start_idx + test_window
+        
+        train_dates = dates[start_idx:train_end_idx_purged]
+        test_dates = dates[test_start_idx:test_end_idx]
         
         train_df = df[df["date"].isin(train_dates)]
         test_df = df[df["date"].isin(test_dates)]
@@ -133,12 +149,16 @@ def walk_forward_validation(
         except:
             auroc, auprc, brier = 0.5, 0.5, 0.25
         
+        # Calcular gap real en días
+        actual_gap = (pd.Timestamp(test_dates[0]) - pd.Timestamp(train_dates[-1])).days if len(train_dates) > 0 else 0
+        
         results.append({
             "fold": fold,
             "train_start": pd.Timestamp(train_dates[0]),
             "train_end": pd.Timestamp(train_dates[-1]),
             "test_start": pd.Timestamp(test_dates[0]),
             "test_end": pd.Timestamp(test_dates[-1]),
+            "actual_gap_days": actual_gap,
             "train_samples": len(train_df),
             "test_samples": len(test_df),
             "train_positive_rate": y_train.mean(),
@@ -237,6 +257,10 @@ def main():
     parser.add_argument("--train-window", type=int, default=60)
     parser.add_argument("--test-window", type=int, default=14)
     parser.add_argument("--step", type=int, default=7)
+    parser.add_argument("--gap", type=int, default=0, 
+                       help="Días de embargo entre train y test (recomendado: 14)")
+    parser.add_argument("--purge", type=int, default=0,
+                       help="Días a eliminar del final de train (recomendado: 14)")
     parser.add_argument("--output", "-o", type=Path, default=None)
     
     args = parser.parse_args()
@@ -258,6 +282,8 @@ def main():
         train_window=args.train_window,
         test_window=args.test_window,
         step=args.step,
+        gap=args.gap,
+        purge=args.purge,
         model_class=RandomForestClassifier,
         model_params={"n_estimators": 100, "max_depth": 10, "class_weight": "balanced", "n_jobs": -1}
     )

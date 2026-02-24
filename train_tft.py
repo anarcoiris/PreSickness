@@ -8,11 +8,17 @@ Responsables:
 """
 from __future__ import annotations
 
-import asyncio
-import logging
-from datetime import datetime
+import sys
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
+if sys.platform == 'win32':
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+import logging
+import json
+import os
 import numpy as np
 import pandas as pd
 
@@ -20,8 +26,8 @@ import torch
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data import GroupNormalizer
 from pytorch_forecasting.metrics import QuantileLoss
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 import mlflow
 import mlflow.pytorch
 
@@ -40,7 +46,7 @@ class TrainingSettings(BaseSettings):
     """
 
     db_dsn: str = Field(
-        default="postgresql://emuser:changeme@localhost/empredictor",
+        default="postgresql://emuser:changeme@127.0.0.1:5432/empredictor",
         description="Cadena de conexión a la base de datos.",
     )
     mlflow_uri: str = Field(
@@ -98,23 +104,35 @@ class MSRelapsePredictorDataset:
                     fw.window_size_days,
                     fw.features,
                     fw.num_datapoints
-                FROM feature_windows fw
-                JOIN users u ON fw.user_id_hash = u.user_id_hash
+                FROM public.feature_windows fw
+                JOIN public.users u ON fw.user_id_hash = u.user_id_hash
                 WHERE u.status = 'active'
                     AND fw.window_end >= $1
                     AND fw.window_end <= $2
                 ORDER BY fw.user_id_hash, fw.window_end
             """
             
-            start = start_date or '2024-01-01'
-            end = end_date or datetime.now().strftime('%Y-%m-%d')
+            start = pd.to_datetime(start_date or '2024-01-01')
+            end = pd.to_datetime(end_date or datetime.now().strftime('%Y-%m-%d'))
             
+            # Ensure they are timezone-aware if the DB expects it (TIMESTAMPTZ)
+            # timescaledb usually defaults to something, but let's be safe
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+
             rows = await conn.fetch(features_query, start, end)
             
             # Parse JSONB features
             data = []
             for row in rows:
-                feat = dict(row['features'])
+                features_raw = row['features']
+                if isinstance(features_raw, str):
+                    feat = json.loads(features_raw)
+                else:
+                    feat = dict(features_raw)
+                
                 feat['user_id_hash'] = row['user_id_hash']
                 feat['date'] = row['date']
                 feat['window_size_days'] = row['window_size_days']
@@ -125,11 +143,11 @@ class MSRelapsePredictorDataset:
             # Load clinical events (Y - ground truth)
             events_query = """
                 SELECT 
-                    user_id_hash,
+                    patient_id as user_id_hash,
                     event_date,
                     event_type
-                FROM clinical_events
-                WHERE event_type = 'relapse'
+                FROM public.clinical_events
+                WHERE event_type = 'confirmed_relapse'
                     AND event_date >= $1
                     AND event_date <= $2
             """
@@ -156,6 +174,9 @@ class MSRelapsePredictorDataset:
         """
         Crea labels binarias: ¿habrá un brote en los próximos N días?
         """
+        if features_df.empty:
+            return features_df
+
         df = features_df.copy()
         df['date'] = pd.to_datetime(df['date'])
         
@@ -230,10 +251,11 @@ class MSRelapsePredictorDataset:
             time_idx='time_idx',
             target=target,
             group_ids=['user_id_hash'],
-            min_encoder_length=7,
-            max_encoder_length=max_encoder_length,
+            allow_missing_timesteps=True,
+            min_encoder_length=1,
+            max_encoder_length=14,
             min_prediction_length=1,
-            max_prediction_length=max_prediction_length,
+            max_prediction_length=7,
             static_categoricals=static_categoricals,
             static_reals=static_reals,
             time_varying_known_categoricals=time_varying_known_categoricals,
@@ -323,7 +345,8 @@ class TFTTrainer:
             # Trainer
             trainer = pl.Trainer(
                 max_epochs=kwargs.get('max_epochs', 30),
-                gpus=1 if torch.cuda.is_available() else 0,
+                accelerator="auto",
+                devices="auto",
                 gradient_clip_val=kwargs.get('gradient_clip_val', 0.1),
                 callbacks=[early_stop, checkpoint],
                 enable_progress_bar=True,
@@ -345,6 +368,15 @@ class TFTTrainer:
             # Log model
             mlflow.pytorch.log_model(tft, "model")
             
+            # Register model in registry
+            try:
+                run_id = mlflow.active_run().info.run_id
+                model_uri = f"runs:/{run_id}/model"
+                mlflow.register_model(model_uri, "tft_prototype")
+                logger.info("Model registered as 'tft_prototype'")
+            except Exception as e:
+                logger.warning(f"Could not register model: {e}")
+            
             logger.info(f"Training completed. Metrics: {metrics}")
             
             return tft, metrics
@@ -360,17 +392,13 @@ class TFTTrainer:
         """
         model.eval()
         
-        predictions = []
-        actuals = []
+        # evaluation using predict() is easier and less error-prone
+        out = model.predict(dataloader, return_y=True, mode="raw")
+        predictions = out.output.prediction.cpu().numpy()
+        actuals = out.y[0].cpu().numpy()
         
-        with torch.no_grad():
-            for batch in dataloader:
-                pred = model(batch)
-                predictions.extend(pred['prediction'].cpu().numpy())
-                actuals.extend(batch['target'].cpu().numpy())
-        
-        predictions = np.array(predictions).flatten()
-        actuals = np.array(actuals).flatten()
+        predictions = predictions.flatten()
+        actuals = actuals.flatten()
         
         # Binary classification metrics
         try:
@@ -396,6 +424,12 @@ class TFTTrainer:
 async def main():
     logging.basicConfig(level=logging.INFO)
     settings = TrainingSettings()
+    print(f"DEBUG: DSN used: {settings.db_dsn}")
+    logger.info("Using DB DSN: %s", settings.db_dsn)
+    
+    # Fix seed for reproducibility
+    pl.seed_everything(42, workers=True)
+    
     logger.info(
         "Iniciando entrenamiento TFT (horizon=%sd, rango=%s→%s)",
         settings.target_horizon,
@@ -427,23 +461,24 @@ async def main():
         positive_rate,
     )
 
+    # === Preprocessing para TFT ===
+    df = df[df['window_size_days'] == 30].copy()
+    df[target_col] = df[target_col].astype(float)
+    df = df.sort_values(['user_id_hash', 'date'])
+    df['time_idx'] = (df['date'] - df['date'].min()).dt.days
+
     unique_dates = sorted(df["date"].unique())
     if len(unique_dates) < 2:
         logger.error("No hay suficientes timestamps para separar train/val.")
         return
 
     split_idx = max(1, int(len(unique_dates) * 0.8))
-    train_dates = unique_dates[:split_idx]
-    val_dates = unique_dates[split_idx:]
+    split_date = unique_dates[split_idx]
 
-    train_df = df[df["date"].isin(train_dates)]
-    val_df = df[df["date"].isin(val_dates)]
+    train_df = df[df["date"] < split_date]
+    # Inclusión de historia para el set de validación
+    val_df = df[df["date"] >= (split_date - pd.Timedelta(days=31))]
 
-    if val_df.empty:
-        logger.warning("Split de validación vacío. Tomando el 10%% final del train.")
-        val_cut = max(1, int(len(train_df) * 0.1))
-        val_df = train_df.tail(val_cut)
-        train_df = train_df.iloc[:-val_cut]
     if train_df.empty:
         raise ValueError("Train dataset quedó vacío tras el split. Revisa fechas.")
 
@@ -459,8 +494,6 @@ async def main():
     val_dataset = TimeSeriesDataSet.from_dataset(
         train_dataset,
         val_df,
-        predict=True,
-        stop_randomization=True,
     )
 
     trainer = TFTTrainer({"mlflow_uri": settings.mlflow_uri})

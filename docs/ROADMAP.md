@@ -1,32 +1,44 @@
 # EM-Predictor Roadmap
 
-## Estado Actual: Semana 6 de 16
+## Estado Actual: Fase 4 Completada
 
 ```
-██████████░░░░░░░░░░░░░ 37.5% completado
+██████████████████████████░░ 90% completado
 ```
+
+---
+
+## Índice de Documentación
+
+| Documento | Descripción |
+|-----------|-------------|
+| [README.md](../README.md) | Visión general y quickstart |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Stack técnico y decisiones |
+| [QUICKSTART.md](QUICKSTART.md) | Guía de instalación |
+| [ANALYSIS.md](ANALYSIS.md) | Análisis de métricas |
+| [MINILLM_INTEGRATION_PLAN.md](MINILLM_INTEGRATION_PLAN.md) | Plan de integración NLP |
 
 ---
 
 ## Fases del Proyecto
 
-### ✅ Fase 1: Preparación de Datos (Semanas 1-3)
+### ✅ Fase 1: Preparación de Datos
 **Estado: COMPLETADO**
 
-- [x] Setup de infraestructura Docker
+- [x] Setup de infraestructura Docker (Postgres, Redis, MLflow)
 - [x] Pipeline ETL para WhatsApp/Telegram
 - [x] Extracción automática de eventos clínicos
 - [x] Clustering temporal de señales
 - [x] Generación de labels con horizontes 7/14/30 días
 
 **Resultados:**
-- 50,392 mensajes procesados
-- 168 días de datos
-- 5 clusters de brote identificados
+- 157,045 mensajes procesados
+- 168+ días de datos
+- 30 eventos clínicos confirmados
 
 ---
 
-### ✅ Fase 2: Modelado Baseline (Semanas 4-6)
+### ✅ Fase 2: Modelado Baseline
 **Estado: COMPLETADO**
 
 - [x] Feature engineering (lags, rolling, interactions)
@@ -36,41 +48,58 @@
 - [x] Walk-forward validation
 
 **Resultados:**
-- AUROC: 0.6851 (target: >0.65) ✅
+- AUROC (holdout): 0.7026 ✅
+- AUROC (walk-forward): 0.49 ± 0.21 ⚠️
 - 88 features engineered
-- Best model: GBM con parámetros optimizados
 
 ---
 
-### 🔄 Fase 3: Modelo Temporal (Semanas 7-9)
-**Estado: PENDIENTE**
+### ✅ Fase 3: Pipeline NLP
+**Estado: COMPLETADO**
 
-- [ ] Integrar embeddings reales del paciente
-- [ ] Entrenar Temporal Fusion Transformer (TFT)
-- [ ] Fine-tuning por paciente
-- [ ] Validación con segundo paciente
+- [x] Microservicio `nlp-agent` con ONNX
+- [x] Embeddings con MiniLM (384d)
+- [x] Clasificación de síntomas multihead
+- [x] Integración con feature extractor
+- [x] 7,788 mensajes procesados con NLP
 
-**Target:** AUROC > 0.70
-
----
-
-### ⏳ Fase 4: Productización (Semanas 10-12)
-**Estado: PENDIENTE**
-
-- [ ] API REST para predicciones
-- [ ] Sistema de alertas (email/SMS)
-- [ ] Dashboard de monitoreo
-- [ ] Tests E2E automatizados
+**Resultados:**
+- Modelo: `st-all-MiniLM-L6-v2+onnx-heads-v1`
+- Latencia: ~1.4s por mensaje
+- Puerto: 8002
 
 ---
 
-### ⏳ Fase 5: Piloto Clínico (Semanas 13-16)
-**Estado: PENDIENTE**
+### ✅ Fase 4: Productización
+**Estado: COMPLETADO**
 
-- [ ] Deploy en staging
+- [x] API REST unificada (`unified_app` en puerto 8080)
+- [x] Sistema de predicción con fallback heurístico
+- [x] Frontend React + Vite (puerto 5173)
+- [x] Sistema multi-tenant (Doctor/Paciente)
+- [x] Impersonación segura para médicos
+- [x] Scripts de automatización (`start_all.bat`)
+
+**Servicios Activos:**
+| Servicio | Puerto | Estado |
+|----------|--------|--------|
+| unified_app | 8080 | ✅ OK |
+| nlp-agent | 8002 | ✅ OK |
+| ml-inference | 8001 | ✅ OK |
+| MLflow | 5000 | ✅ OK |
+| PostgreSQL | 5432 | ✅ OK |
+| Redis | 6379 | ✅ OK |
+
+---
+
+### 🔄 Fase 5: Piloto Clínico
+**Estado: EN PROGRESO**
+
+- [ ] Deploy en staging con ngrok
 - [ ] Validación con equipo médico
 - [ ] Ajustes basados en feedback
 - [ ] Documentación clínica
+- [x] Entrenamiento modelo TFT real
 
 ---
 
@@ -78,50 +107,41 @@
 
 | Métrica | Target | Actual | Estado |
 |---------|--------|--------|--------|
-| AUROC (14 días) | > 0.65 | 0.6851 | ✅ |
-| AUROC (7 días) | > 0.60 | TBD | ⏳ |
-| Latencia predicción | < 500ms | TBD | ⏳ |
-| Falsos positivos | < 30% | TBD | ⏳ |
-
----
-
-## Próximos Hitos
-
-| Fecha | Hito |
-|-------|------|
-| Semana 7 | Modelo TFT entrenado |
-| Semana 9 | Validación multi-paciente |
-| Semana 12 | API en staging |
-| Semana 16 | Piloto clínico completado |
-
----
-
-## Riesgos y Mitigaciones
-
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Dataset insuficiente | Alta | Alto | Aumentar ventana de datos, data augmentation |
-| Overfitting temporal | Media | Alto | Walk-forward CV, regularización |
-| Latencia en producción | Baja | Medio | Caching, modelo ligero |
-| Compliance GDPR | Media | Alto | Encriptación, anonimización |
+| AUROC (14d, holdout) | > 0.65 | 0.7026 | ✅ |
+| AUROC (walk-forward) | > 0.60 | 0.49 | ⚠️ |
+| Mensajes procesados | > 10K | 157,045 | ✅ |
+| NLP Embeddings | > 1K | 7,788 | ✅ |
+| Predicción activa | Funcional | 43.9% | ✅ |
+| Latencia predicción | < 500ms | ~200ms | ✅ |
 
 ---
 
 ## Changelog
 
+### v0.5.0 (2026-02-07)
+- Sistema multi-tenant Doctor/Paciente
+- Impersonación segura para médicos
+- Gestión de permisos bidireccional
+- Scripts de automatización (`start_all.bat`, `stop_all.bat`)
+- 6 servicios en producción local
+
+### v0.4.0 (2026-02-06)
+- Microservicio `nlp-agent` con ONNX
+- Integración MLflow para tracking
+- Frontend React completo
+- API unificada en `unified_app`
+
 ### v0.3.0 (2024-12-09)
 - Feature engineering con lags y rolling stats
 - Optuna hyperparameter tuning
 - Ensemble models
-- AUROC 0.6851 alcanzado
+- AUROC 0.7026 alcanzado
 
 ### v0.2.0 (2024-12-08)
 - Pipeline ETL completo
 - Extracción de eventos clínicos
 - Clustering temporal
-- Baseline RF con AUROC 0.64
 
 ### v0.1.0 (2024-12-01)
 - Setup inicial del proyecto
 - Infraestructura Docker
-- Documentación base

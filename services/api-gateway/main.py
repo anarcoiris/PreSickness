@@ -24,7 +24,11 @@ from fastapi import (
     status,
     Header,
 )
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
+import jwt
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -49,6 +53,10 @@ class Settings(BaseSettings):
     allowed_clock_skew_seconds: int = Field(default=300)
     max_payload_age_minutes: int = Field(default=60)
     cache_ttl_seconds: int = Field(default=3600)
+    
+    jwt_secret: str = Field(default="dev_secret_key_123", env="JWT_SECRET")
+    google_client_id: Optional[str] = Field(default=None, env="GOOGLE_CLIENT_ID")
+    google_client_secret: Optional[str] = Field(default=None, env="GOOGLE_CLIENT_SECRET")
 
     model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
@@ -124,11 +132,19 @@ class DataPoint(BaseModel):
 async def verify_device(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> str:
-    """Valida token de dispositivo almacenado en Redis."""
+    """Valida token de dispositivo almacenado en Redis o JWT de usuario web."""
+    token = credentials.credentials
+    try:
+        # Intenta verificar si es un JWT de usuario web
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        return payload.get("sub")
+    except jwt.PyJWTError:
+        pass # fallback to device token in redis
+
     if not redis_client:
         raise HTTPException(status_code=503, detail="Auth service unavailable")
 
-    token_key = f"{settings.device_token_prefix}:{credentials.credentials}"
+    token_key = f"{settings.device_token_prefix}:{token}"
     device_id = await redis_client.get(token_key)
     if not device_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
@@ -136,6 +152,27 @@ async def verify_device(
         device_id.decode() if isinstance(device_id, (bytes, bytearray)) else str(device_id)
     )
     return device_id_hash
+    
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token", auto_error=False)
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        user_id_hash = payload.get("sub")
+        if not user_id_hash:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            
+        # Optional: Verify user exists in db
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT id FROM users WHERE user_id_hash = $1", user_id_hash)
+                if not row:
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        return {"user_id_hash": user_id_hash, "email": payload.get("email")}
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials")
 
 
 async def verify_signature(data: DataPoint) -> None:
@@ -255,6 +292,99 @@ async def publish_event(payload: Dict[str, Any]) -> None:
         logger.error("No se pudo publicar evento en Kafka: %s", exc)
 
 
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=7)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, settings.jwt_secret, algorithm="HS256")
+
+class GoogleAuthRequest(BaseModel):
+    code: str
+    role: str = "patient"
+    redirect_uri: str = "postmessage"
+
+@app.post("/api/auth/google")
+async def google_auth_endpoint(req: GoogleAuthRequest):
+    if not settings.google_client_id:
+        raise HTTPException(status_code=500, detail="Google Auth not configured")
+        
+    try:
+        client_config = {
+            "web": {
+                "client_id": settings.google_client_id,
+                "project_id": "presickness",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "client_secret": settings.google_client_secret or "dummy",
+                "redirect_uris": [req.redirect_uri]
+            }
+        }
+        
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
+        )
+        flow.redirect_uri = req.redirect_uri
+        flow.fetch_token(code=req.code)
+        
+        # Get user info
+        session = flow.authorized_session()
+        user_info = session.get('https://www.googleapis.com/oauth2/v2/userinfo').json()
+        email = user_info.get("email")
+        name = user_info.get("name", "")
+        google_id = user_info.get("id", "")
+        
+        if not email:
+             raise HTTPException(status_code=400, detail="Could not retrieve email from Google")
+             
+        user_id_hash = hashlib.sha256(email.encode()).hexdigest()
+        
+        # Add to postgres
+        if db_pool:
+             async with db_pool.acquire() as conn:
+                  # Create if not exists
+                  await conn.execute(
+                      """
+                      INSERT INTO users (user_id_hash, email, name, status) 
+                      VALUES ($1, $2, $3, 'active')
+                      ON CONFLICT (user_id_hash) DO UPDATE SET name = EXCLUDED.name
+                      """,
+                      user_id_hash, email, name
+                  )
+                  
+                  await conn.execute(
+                      """
+                      INSERT INTO user_oauth (user_id_hash, provider, access_token, refresh_token)
+                      VALUES ($1, 'google', $2, $3)
+                      ON CONFLICT (user_id_hash, provider) DO UPDATE SET 
+                          access_token = EXCLUDED.access_token,
+                          refresh_token = COALESCE(EXCLUDED.refresh_token, user_oauth.refresh_token),
+                          updated_at = NOW()
+                      """,
+                      user_id_hash, flow.credentials.token, flow.credentials.refresh_token
+                  )
+        
+        token = create_access_token({"sub": user_id_hash, "email": email, "role": req.role})
+        return {"access_token": token, "token_type": "bearer", "user": {"email": email, "name": name, "user_id_hash": user_id_hash}}
+        
+    except Exception as e:
+        logger.error(f"Google auth error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/patients/me")
+async def get_profile(current_user: dict = Depends(get_current_user)):
+    if not db_pool:
+         return {"email": current_user["email"], "id": current_user["user_id_hash"], "role": "patient"}
+         
+    async with db_pool.acquire() as conn:
+         row = await conn.fetchrow("SELECT name, email, user_id_hash, status FROM users WHERE user_id_hash = $1", current_user["user_id_hash"])
+         if row:
+              return {"id": row["user_id_hash"], "email": row["email"], "name": row["name"], "role": "patient", "status": row["status"]}
+         return {"email": current_user["email"], "id": current_user["user_id_hash"], "role": "patient"}
+
 # === API Routes ===
 @app.post("/v1/ingest", status_code=202)
 async def ingest_datapoint(
@@ -360,6 +490,6 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8010, reload=True)
 
 

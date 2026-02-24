@@ -65,14 +65,18 @@ def add_rolling_features(
             continue
         
         for window in windows:
-            # Media móvil
-            df[f"{col}_roll{window}_mean"] = df[col].rolling(window=window, min_periods=1).mean()
+            # IMPORTANTE: shift(1) para evitar data leakage
+            # Solo usamos datos hasta t-1, no el día actual t
+            shifted = df[col].shift(1)
+            
+            # Media móvil (con shift para evitar leakage)
+            df[f"{col}_roll{window}_mean"] = shifted.rolling(window=window, min_periods=1).mean()
             
             # Desviación estándar móvil
-            df[f"{col}_roll{window}_std"] = df[col].rolling(window=window, min_periods=1).std().fillna(0)
+            df[f"{col}_roll{window}_std"] = shifted.rolling(window=window, min_periods=1).std().fillna(0)
             
             # Tendencia (pendiente lineal)
-            df[f"{col}_roll{window}_trend"] = df[col].rolling(window=window, min_periods=2).apply(
+            df[f"{col}_roll{window}_trend"] = shifted.rolling(window=window, min_periods=2).apply(
                 lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) > 1 else 0, raw=False
             ).fillna(0)
     

@@ -1,8 +1,8 @@
 # Plan de Integración MiniLLM para EM Predictor
 
 **Responsables:** Agent ML (Brain), Agent Backend (Backus)  
-**Estado:** 🟡 Esperando dataset etiquetado  
-**Última actualización:** 02/12/2025
+**Estado:** 🟢 Integrado como backend opcional en ETL (`scripts/etl/embeddings.py`)  
+**Última actualización:** 06/02/2026
 
 ---
 

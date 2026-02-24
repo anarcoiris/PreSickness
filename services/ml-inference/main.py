@@ -185,6 +185,16 @@ async def predict(request: PredictionRequest):
     )
 
 
+@app.post("/v1/reload")
+async def reload_model():
+    """Recarga el modelo desde MLflow (útil tras reentrenamiento)."""
+    try:
+        model_wrapper.load()
+        return {"status": "reloaded", "model_uri": model_wrapper.model_uri}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/v1/health")
 async def health():
     return {

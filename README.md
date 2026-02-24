@@ -12,7 +12,56 @@ Predecir recaídas de Esclerosis Múltiple con **7-30 días de antelación** usa
 - Patrones de actividad temporal
 - Features clínicos y de comportamiento
 
-**Métrica objetivo**: AUROC > 0.65 | **Resultado actual**: AUROC 0.6851 ✅
+---
+
+## 📊 Estado Actual
+
+| Métrica | Valor |
+|---------|-------|
+| **Mensajes procesados** | 48,010 |
+| **NLP Embeddings** | 1,940 |
+| **Eventos clínicos** | 30 |
+| **AUROC (holdout)** | 0.7026 ✅ |
+| **Predicción actual** | 43.9% (warning) |
+
+---
+
+## 🚀 Inicio Rápido
+
+### Opción 1: Script Automatizado (Recomendado)
+
+```bash
+# Iniciar todo el sistema
+start_all.bat
+
+# Parar todos los servicios
+stop_all.bat
+```
+
+### Opción 2: Manual
+
+```bash
+# 1. Iniciar containers Docker
+docker start em_postgres em_redis mlflow
+
+# 2. Iniciar servicios
+cd services/nlp-agent && python main.py
+cd services/ml-inference && python main.py
+cd services/unified_app && python main.py --port 8080
+cd services/webapp && npm run dev
+```
+
+---
+
+## 🌐 Servicios
+
+| Servicio | Puerto | URL | Descripción |
+|----------|--------|-----|-------------|
+| Frontend | 5173 | http://localhost:5173 | App React |
+| Backend API | 8080 | http://localhost:8080/docs | FastAPI + Swagger |
+| NLP Agent | 8002 | http://localhost:8002/health | Embeddings + Síntomas |
+| ML Inference | 8001 | http://localhost:8001 | Modelo TFT |
+| MLflow | 5000 | http://localhost:5000 | Tracking ML |
 
 ---
 
@@ -20,11 +69,11 @@ Predecir recaídas de Esclerosis Múltiple con **7-30 días de antelación** usa
 
 | Documento | Descripción |
 |-----------|-------------|
-| [ROADMAP.md](docs/ROADMAP.md) | Estado del proyecto, fases y próximos pasos |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Decisiones técnicas, stack y diseño |
-| [QUICKSTART.md](docs/QUICKSTART.md) | Guía rápida de instalación y uso |
-| [PLATFORM.md](docs/PLATFORM.md) | **Nuevo**: Plataforma Web, CLI y Backend Unificado |
-| [LEGAL.md](LEGAL/LEGAL.md) | GDPR, HIPAA, consentimiento informado |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | **Estado del proyecto**, fases y métricas |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Stack técnico y decisiones |
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | Guía de instalación paso a paso |
+| [docs/ANALYSIS.md](docs/ANALYSIS.md) | Análisis de resultados ML |
+| [docs/MINILLM_INTEGRATION_PLAN.md](docs/MINILLM_INTEGRATION_PLAN.md) | Plan de integración NLP |
 
 ### Workflows Disponibles
 
@@ -32,82 +81,29 @@ Predecir recaídas de Esclerosis Múltiple con **7-30 días de antelación** usa
 /etl-patient-data      # Procesar datos de paciente
 /train-model           # Entrenar modelo TFT
 /run-services          # Levantar servicios Docker
-/research-predictive-medicine  # Investigar ML en salud
-/research-gpts-nlp     # Investigar modelos de lenguaje
+/deploy-ngrok          # Deploy con acceso remoto
 ```
-
----
-
-## 🚀 Quickstart
-
-### 1. Instalar dependencias
-```bash
-pip install -r requirements.txt
-pip install sentence-transformers optuna
-```
-
-### 2. Procesar datos de paciente
-```bash
-# Extraer eventos clínicos
-python scripts/etl/extract_events.py datos/paciente1_whatsapp.txt --output datos/events.csv
-
-# Ejecutar ETL completo
-python -m scripts.etl.pipeline --input datos/paciente1_whatsapp.txt --events datos/events.csv --patient-id paciente1 --output data/processed/
-
-# Regenerar labels con clusters
-python scripts/etl/regenerate_labels.py --data-path data/processed/paciente1 --clusters datos/paciente1_events_auto_clusters.csv
-```
-
-### 3. Entrenar modelo
-```bash
-# Pipeline completo (feature eng + embeddings + ensemble)
-python scripts/ml/run_full_pipeline.py --data-path data/processed/paciente1
-
-# O paso a paso:
-python scripts/ml/feature_engineering.py --data-path data/processed/paciente1
-python scripts/ml/optuna_simple.py --data-path data/processed/paciente1 --n-trials 30
-python scripts/ml/ensemble_model.py --data-path data/processed/paciente1
-```
-
-### 4. Visualizar resultados
-```bash
-python scripts/ml/plot_features_timeseries.py --data-path data/processed/paciente1
-python scripts/ml/walk_forward_validation.py --data-path data/processed/paciente1
-```
-
----
-
-## 📊 Resultados Actuales (paciente1)
-
-| Modelo | AUROC | AUPRC |
-|--------|-------|-------|
-| GBM (Optuna) | **0.6851** | 0.3557 |
-| RF (Optuna) | 0.6791 | 0.3506 |
-| RF+GBM Average | 0.6611 | 0.3485 |
 
 ---
 
 ## 📁 Estructura del Proyecto
 
 ```
-em-predictor/
+PreSickness/
 ├── datos/                  # Datos crudos de pacientes
 ├── data/processed/         # Features procesados
+├── services/
+│   ├── unified_app/       # Backend API principal (8080)
+│   ├── nlp-agent/         # Microservicio NLP (8002)
+│   ├── ml-inference/      # Microservicio ML (8001)
+│   └── webapp/            # Frontend React (5173)
 ├── scripts/
 │   ├── etl/               # Pipeline de extracción
-│   │   ├── pipeline.py
-│   │   ├── extract_events.py
-│   │   ├── cluster_signals.py
-│   │   └── embeddings.py
 │   └── ml/                # Entrenamiento y evaluación
-│       ├── run_full_pipeline.py
-│       ├── feature_engineering.py
-│       ├── ensemble_model.py
-│       └── optuna_simple.py
-├── services/              # Microservicios (Docker)
 ├── docs/                  # Documentación técnica
 ├── .agent/workflows/      # Workflows automatizados
-└── tinyllm/              # Modelo de lenguaje local
+├── start_all.bat          # Script de inicio
+└── stop_all.bat           # Script de parada
 ```
 
 ---
@@ -115,10 +111,11 @@ em-predictor/
 ## 🔧 Stack Tecnológico
 
 - **ML**: scikit-learn, pytorch-forecasting, optuna
-- **NLP**: sentence-transformers, spacy
+- **NLP**: sentence-transformers (MiniLM), ONNX
 - **Data**: pandas, parquet, TimescaleDB
-- **Infra**: Docker Compose, FastAPI, Redis
-- **MLOps**: MLflow, Prometheus, Grafana
+- **Backend**: FastAPI, pydantic, psycopg3
+- **Frontend**: React, Vite, TanStack Query
+- **Infra**: Docker Compose, Redis, MLflow
 
 ---
 

@@ -1,38 +1,105 @@
 # Arquitectura EM-Predictor
 
+> **Referencia**: [ROADMAP.md](ROADMAP.md) | [QUICKSTART.md](QUICKSTART.md)
+
 ## Visión General
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      INGESTA DE DATOS                       │
-├──────────────┬──────────────┬──────────────┬───────────────┤
-│   WhatsApp   │   Telegram   │     CSV      │    API Rest   │
-└──────┬───────┴──────┬───────┴──────┬───────┴───────┬───────┘
-       │              │              │               │
-       ▼              ▼              ▼               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     ETL PIPELINE                            │
-│  extract_events.py → cluster_signals.py → pipeline.py      │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   FEATURE STORE                             │
-│         data/processed/{patient_id}/*.parquet               │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    ML PIPELINE                              │
-│  feature_engineering → embeddings → ensemble → optuna       │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   INFERENCE API                             │
-│              FastAPI + Redis Cache + Alerts                 │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           INGESTA DE DATOS                                  │
+├──────────────┬──────────────┬──────────────┬───────────────┬───────────────┤
+│   WhatsApp   │   Telegram   │     CSV      │   API REST    │   WhatsApp    │
+│   (export)   │   (export)   │   (manual)   │   (upload)    │   (live)      │
+└──────┬───────┴──────┬───────┴──────┬───────┴───────┬───────┴───────┬───────┘
+       │              │              │               │               │
+       └──────────────┴──────────────┴───────────────┴───────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         unified_app (8080)                                  │
+│  FastAPI Backend │ Auth │ Upload │ Events │ Predictions │ Doctor/Patient   │
+└─────────────────────────────────┬───────────────────────────────────────────┘
+                                  │
+              ┌───────────────────┼───────────────────┐
+              ▼                   ▼                   ▼
+┌─────────────────────┐ ┌─────────────────┐ ┌─────────────────────┐
+│   nlp-agent (8002)  │ │ ml-inference    │ │   TimescaleDB       │
+│   ─────────────────  │ │    (8001)       │ │     (5432)          │
+│   • MiniLM ONNX     │ │ ───────────────  │ │ ─────────────────── │
+│   • Symptom Heads   │ │ • TFT Model     │ │ • users             │
+│   • Embeddings 384d │ │ • Heuristic FB  │ │ • events            │
+│   • Linguistic Meta │ │ • MLflow Client │ │ • messages          │
+└─────────────────────┘ └────────┬────────┘ │ • predictions       │
+                                 │          └─────────────────────┘
+                                 ▼
+                        ┌─────────────────┐
+                        │  MLflow (5000)  │
+                        │ ───────────────  │
+                        │ • Experiments   │
+                        │ • Model Registry│
+                        │ • Artifacts     │
+                        └─────────────────┘
 ```
+
+---
+
+## Microservicios
+
+### unified_app (Puerto 8080)
+**Backend API Principal**
+
+| Endpoint | Método | Descripción |
+|----------|--------|-------------|
+| `/api/auth/register` | POST | Registro usuario |
+| `/api/auth/login` | POST | Login JWT |
+| `/api/patients/me` | GET | Perfil usuario |
+| `/api/patients/upload` | POST | Subir WhatsApp |
+| `/api/events/` | GET | Lista eventos |
+| `/api/predict` | POST | Predicción ML |
+| `/api/doctor/patients` | GET/POST | Gestión pacientes |
+| `/api/patient/doctors` | GET/DELETE | Gestión permisos |
+
+**Archivos clave:**
+- `services/unified_app/main.py` - FastAPI app
+- `services/unified_app/db.py` - Capa de datos async
+- `services/unified_app/events.py` - Parser WhatsApp
+
+---
+
+### nlp-agent (Puerto 8002)
+**Servicio de Procesamiento NLP**
+
+| Endpoint | Método | Descripción |
+|----------|--------|-------------|
+| `/health` | GET | Estado del servicio |
+| `/v1/process` | POST | Procesar mensaje |
+
+**Stack:**
+- Modelo: `sentence-transformers/all-MiniLM-L6-v2`
+- Inference: ONNX Runtime
+- Heads: Clasificación multihead de síntomas
+
+**Archivos clave:**
+- `services/nlp-agent/main.py` - FastAPI endpoints
+- `services/nlp-agent/model.py` - Motor ONNX
+- `services/nlp-agent/heads_v1.onnx` - Modelo entrenado
+
+---
+
+### ml-inference (Puerto 8001)
+**Servicio de Predicción ML**
+
+| Endpoint | Método | Descripción |
+|----------|--------|-------------|
+| `/predict` | POST | Predicción TFT |
+
+**Stack:**
+- Modelo: TFT (Temporal Fusion Transformer)
+- Fallback: Heurística basada en eventos recientes
+- Registry: MLflow
+
+**Archivos clave:**
+- `services/ml-inference/main.py` - FastAPI + MLflow client
 
 ---
 
@@ -41,142 +108,80 @@
 ### Core ML
 | Componente | Tecnología | Justificación |
 |------------|------------|---------------|
-| Training | scikit-learn | Baselines rápidos, bien probados |
+| Baseline | scikit-learn | Modelos rápidos, probados |
 | Temporal | pytorch-forecasting | TFT para series temporales |
-| HPO | Optuna | Pruning eficiente, fácil de usar |
-| Embeddings | sentence-transformers | Multilingüe, local, gratuito |
+| HPO | Optuna | Pruning eficiente |
+| Embeddings | sentence-transformers | Multilingüe, local |
+| Inference | ONNX Runtime | Latencia optimizada |
 
 ### Data
 | Componente | Tecnología | Justificación |
 |------------|------------|---------------|
-| Storage | Parquet | Columnar, compresión, fast I/O |
-| DB | TimescaleDB | Time-series optimized PostgreSQL |
+| Storage | Parquet | Columnar, compresión |
+| DB | TimescaleDB | Time-series PostgreSQL |
 | Cache | Redis | Feature store en memoria |
-| Queue | Redpanda | Kafka-compatible, más simple |
 
 ### Infraestructura
 | Componente | Tecnología | Justificación |
 |------------|------------|---------------|
-| Containers | Docker Compose | Desarrollo local simple |
-| API | FastAPI | Async, autodocs, validación |
+| Containers | Docker Compose | Dev local simple |
+| API | FastAPI | Async, autodocs |
 | MLOps | MLflow | Tracking experimentos |
-| Monitoring | Prometheus + Grafana | Estándar industria |
+| Frontend | React + Vite | SPA moderna |
 
 ---
 
-## Decisiones Clave
+## Decisiones Arquitectónicas (ADR)
 
 ### ADR-001: Modelos Locales vs Cloud
-**Decisión**: Priorizar modelos locales (sentence-transformers, MiniLLM)
+**Decisión**: Priorizar modelos locales (MiniLM, ONNX)
 
-**Contexto**: Datos de salud sensibles, GDPR/HIPAA
-
-**Alternativas**:
-- OpenAI API: Mejor calidad pero riesgo de privacidad
-- Cloud privado: Costoso para MVP
+**Razón**: Datos de salud sensibles, GDPR compliance
 
 **Consecuencias**:
-- (+) Control total de datos
-- (+) Sin costes de API
-- (-) Menor capacidad que GPT-4
+- ✅ Control total de datos
+- ✅ Sin costes de API
+- ⚠️ Menor capacidad que GPT-4
 
 ---
 
-### ADR-002: Ventanas Temporales
-**Decisión**: Usar ventanas de 7 días con stride de 1 día
+### ADR-002: Microservicios vs Monolito
+**Decisión**: Arquitectura de microservicios ligeros
 
-**Contexto**: Balancear granularidad vs ruido
-
-**Alternativas**:
-- Ventanas diarias: Muy ruidosas
-- Ventanas de 14 días: Pierde granularidad
+**Razón**: Escalabilidad independiente, despliegue parcial
 
 **Consecuencias**:
-- (+) Captura patrones semanales
-- (+) Suficientes muestras para training
-- (-) Data leakage entre ventanas solapadas
+- ✅ NLP puede escalar separado de ML
+- ✅ Fallback si un servicio falla
+- ⚠️ Complejidad de red
 
 ---
 
-### ADR-003: Labels de Brote
-**Decisión**: Usar clusters de señales en lugar de eventos individuales
+### ADR-003: Multi-Tenant con Impersonación
+**Decisión**: Header `X-Patient-ID` para delegación
 
-**Contexto**: Eventos individuales generan 95%+ positivos
-
-**Alternativas**:
-- Cada mención = evento: Demasiados positivos
-- Solo eventos severos: Muy pocos datos
+**Razón**: Médico necesita ver datos de paciente sin duplicar endpoints
 
 **Consecuencias**:
-- (+) Balance 15-30% positivos
-- (+) Representa períodos reales de riesgo
-- (-) Requiere validación clínica
+- ✅ Endpoints reutilizados
+- ✅ Auditoría clara
+- ⚠️ Requiere validación de permisos
 
 ---
 
-## Features Pipeline
+## Seguridad
 
-### Extracción (ETL)
-```python
-# Entrada: WhatsApp export
-# Salida: DataFrame con mensajes normalizados
+### Autenticación
+- JWT con expiración 24h
+- Hash de contraseñas con bcrypt
+- Roles: `patient`, `doctor`
 
-MessageExtractor → filtro sistema → normalización
-EventsExtractor → keywords → severidad → clustering
-TextProcessor → tokenización → métricas lingüísticas
-```
+### Autorización
+- Middleware de verificación de permisos
+- Tabla `doctor_patient_access`
+- Revocación bilateral
 
-### Ingeniería
-```python
-# Entrada: Features diarios
-# Salida: Features enriquecidos
-
-Lag Features: valores t-1, t-3, t-7
-Rolling Stats: mean, std, trend en ventanas 3, 7 días
-Change Features: diff, pct_change
-Interactions: sentiment × volume, complexity score
-```
-
-### Embeddings
-```python
-# Modelos soportados
-PRESETS = {
-    "fast": "distiluse-base-multilingual-cased-v1",     # 512d
-    "balanced": "paraphrase-multilingual-mpnet-base-v2", # 768d
-    "quality": "intfloat/multilingual-e5-large",        # 1024d
-}
-```
-
----
-
-## Modelos
-
-### Baseline (Actual)
-- **RandomForest**: AUROC 0.6791 (optimizado)
-- **GradientBoosting**: AUROC 0.6851 (mejor)
-- **Ensemble**: Voting/Stacking de ambos
-
-### Temporal (Próximo)
-- **TFT (Temporal Fusion Transformer)**
-  - Attention sobre secuencias
-  - Interpretabilidad de features
-  - Multi-horizon forecasting
-
----
-
-## Seguridad y Compliance
-
-### Datos en Reposo
-- Encriptación AES-256 para datos de pacientes
-- Pseudonimización de IDs
-- Logs sin PII
-
-### Datos en Tránsito
+### Datos
+- Encriptación AES-256 en reposo
 - HTTPS obligatorio
-- JWT para autenticación
-- Rate limiting
-
-### GDPR
-- Derecho al olvido implementado
-- Consentimiento informado requerido
-- DPIA documentado en `/LEGAL/`
+- PII pseudonimizado
