@@ -2,8 +2,6 @@
 Unified App - Backend API
 FastAPI con autenticación JWT, gestión de pacientes y proxy a servicios ML
 """
-from __future__ import annotations
-
 import hashlib
 import os
 import secrets
@@ -31,7 +29,12 @@ try:
     from slowapi.util import get_remote_address
     from slowapi.errors import RateLimitExceeded
 except ImportError:
-    pass
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, "-m", "pip", "install", "slowapi", "-q"])
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:
@@ -99,6 +102,7 @@ class UploadResponse(BaseModel):
 class GoogleToken(BaseModel):
     id_token: Optional[str] = None
     code: Optional[str] = None
+    redirect_uri: str = "postmessage"
     role: str = "patient"
 
 
@@ -152,17 +156,37 @@ class SystemIncidentResponse(BaseModel):
 
 
 from contextlib import asynccontextmanager
+import redis.asyncio as redis
+from aiokafka import AIOKafkaProducer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Load initial data
+    # Startup: Load initial data and connect external services
     try:
-        # Importar aquí para evitar circular imports si los hubiera
         from events import load_initial_data_async
         await load_initial_data_async()
         print("[INFO] Application startup complete")
     except Exception as e:
         print(f"[WARN] Failed to load initial data: {e}")
+        
+    import ingest
+    try:
+        redis_kwargs = {}
+        if settings.redis_password:
+            redis_kwargs["password"] = settings.redis_password
+        ingest.redis_client = redis.from_url(settings.redis_url, **redis_kwargs)
+        
+        if settings.kafka_bootstrap_servers:
+            ingest.kafka_producer = AIOKafkaProducer(
+                bootstrap_servers=settings.kafka_bootstrap_servers
+            )
+            await ingest.kafka_producer.start()
+            print(f"[INFO] Kafka producer initialized (topic={settings.kafka_topic})")
+        else:
+            print("[WARN] Kafka not configured. Real-time NLP may be degraded.")
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize external services: {e}")
         
     yield
     
@@ -170,9 +194,14 @@ async def lifespan(app: FastAPI):
     try:
         from events import db
         await db.close_pool()
+        if ingest.redis_client:
+            await ingest.redis_client.close()
+        if ingest.kafka_producer:
+            await ingest.kafka_producer.stop()
+            
         print("[INFO] Application shutdown complete")
     except Exception as e:
-        print(f"[WARN] Failed to close DB pool: {e}")
+        print(f"[WARN] Failed to close resources cleanly: {e}")
 
 
 limiter = Limiter(key_func=get_remote_address)
@@ -189,19 +218,26 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # En producción: añadir URL real
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://prebrote.ddns.net",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Registrar router de eventos
+# Registrar routers
 try:
     from events import router as events_router
     app.include_router(events_router)
     
     from analysis import router as analysis_router
     app.include_router(analysis_router, prefix="/api/analysis", tags=["analysis"])
+    
+    from ingest import router as ingest_router
+    app.include_router(ingest_router)
     
 except ImportError as e:
     print(f"[WARN] Failed to load routers: {e}")
@@ -348,12 +384,17 @@ async def google_login(data: GoogleToken):
     name = "Google User"
     tokens_to_store = None
 
+    print(f"[DEBUG] google_login called. code={bool(data.code)}, id_token={bool(data.id_token)}, redirect_uri={data.redirect_uri}")
+    print(f"[DEBUG] GOOGLE_CLIENT_ID from settings: {settings.google_client_id[:20] if settings.google_client_id else 'EMPTY'}...")
+    print(f"[DEBUG] GOOGLE_CLIENT_SECRET from settings: {settings.google_client_secret[:10] if settings.google_client_secret else 'EMPTY'}...")
+
     # 1. AUTH CODE FLOW (Preferred for Web - supports Offline Access/Calendar)
     if data.code:
         try:
             from google_auth_oauthlib.flow import Flow
             from google.oauth2 import id_token
             from google.auth.transport import requests as google_requests
+            import os
 
             # Si estamos en demo/dev sin credenciales reales
             if not settings.google_client_id or not settings.google_client_secret:
@@ -363,34 +404,43 @@ async def google_login(data: GoogleToken):
                 else:
                     raise HTTPException(status_code=500, detail="Google Client ID/Secret not configured on server")
             else:
-                flow_config = {
+                code = data.code
+                redirect_uri = data.redirect_uri
+                print(f"[DEBUG] Using redirect_uri={redirect_uri}")
+                if not code:
+                    raise HTTPException(status_code=400, detail="Código de autorización no proporcionado")
+
+                client_config = {
                     "web": {
                         "client_id": settings.google_client_id,
-                        "client_secret": settings.google_client_secret,
+                        "project_id": "ms-predictor",
                         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                         "token_uri": "https://oauth2.googleapis.com/token",
+                        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                        "client_secret": settings.google_client_secret,
+                        "redirect_uris": [redirect_uri],
+                        "javascript_origins": ["https://prebrote.ddns.net"]
                     }
                 }
-                # "postmessage" is the magic redirect_uri for popup/SPA flows
                 flow = Flow.from_client_config(
-                    flow_config,
+                    client_config,
                     scopes=[
                         "openid", 
                         "https://www.googleapis.com/auth/userinfo.email", 
-                        "https://www.googleapis.com/auth/userinfo.profile",
-                        "https://www.googleapis.com/auth/calendar"
+                        "https://www.googleapis.com/auth/userinfo.profile"
                     ],
-                    redirect_uri="postmessage" 
+                    redirect_uri=redirect_uri 
                 )
                 
                 flow.fetch_token(code=data.code)
                 credentials = flow.credentials
 
-                # Verify ID Token
+                # Verify ID Token (with clock skew tolerance)
                 id_info = id_token.verify_oauth2_token(
                     credentials.id_token, 
                     google_requests.Request(), 
-                    settings.google_client_id
+                    settings.google_client_id,
+                    clock_skew_in_seconds=10
                 )
                 
                 email = id_info['email']
@@ -846,6 +896,31 @@ async def admin_resolve_incident(incident_id: UUID, admin: dict = Depends(get_cu
     return incident
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# STATIC FILE SERVING (SPA - serves webapp dist/)
+# ══════════════════════════════════════════════════════════════════════════════
+
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+# Resolve the webapp dist directory
+WEBAPP_DIR = Path(__file__).resolve().parent.parent / "webapp" / "dist"
+
+if WEBAPP_DIR.exists():
+    # Mount /assets for JS/CSS bundles
+    app.mount("/assets", StaticFiles(directory=str(WEBAPP_DIR / "assets")), name="static-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve the SPA. Any non-API path returns index.html."""
+        file_path = WEBAPP_DIR / full_path
+        if full_path and file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(WEBAPP_DIR / "index.html"))
+else:
+    print(f"[WARN] Webapp dist not found at {WEBAPP_DIR}. Frontend will not be served.")
+
+
 if __name__ == "__main__":
     import uvicorn
     import argparse
@@ -854,3 +929,4 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     uvicorn.run("main:app", host=args.host, port=args.port, reload=True)
+

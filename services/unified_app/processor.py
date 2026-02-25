@@ -39,7 +39,7 @@ async def extract_features_from_message(
             "language_hint": "es"
         }
         
-        async with session.post(NLP_AGENT_URL, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+        async with session.post(NLP_AGENT_URL, json=payload, timeout=aiohttp.ClientTimeout(total=300.0)) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return data
@@ -47,7 +47,7 @@ async def extract_features_from_message(
                 logger.warning(f"NLP Agent returned {resp.status} for message {message.get('id')}")
                 return None
     except Exception as e:
-        logger.error(f"Error calling NLP Agent: {e}")
+        logger.error(f"Error calling NLP Agent ({type(e).__name__}): {e}")
         return None
 
 
@@ -162,7 +162,7 @@ async def upgrade_nlp_for_patient(patient_id: str, limit: int = 100) -> dict:
     if not needing_nlp:
         return {"upgraded": 0}
 
-    semaphore = asyncio.Semaphore(10)  # Max 10 parallel requests
+    semaphore = asyncio.Semaphore(2)  # Max 2 parallel requests to prevent Ollama deepseek-r1 queue timeout
     
     async def process_single(session: aiohttp.ClientSession, msg: dict):
         async with semaphore:

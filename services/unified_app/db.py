@@ -18,7 +18,7 @@ if sys.platform == 'win32':
 logger = logging.getLogger(__name__)
 
 # Database configuration
-DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("DB_NAME", "empredictor")
 DB_USER = os.getenv("DB_USER", "emuser")
@@ -36,7 +36,15 @@ async def get_pool():
         try:
             from psycopg_pool import AsyncConnectionPool
             from psycopg.rows import dict_row
+        except ImportError:
+            import subprocess
+            import sys
+            logger.warning("[DB] psycopg_pool not found, installing automatically...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "psycopg[binary,pool]", "-q"])
+            from psycopg_pool import AsyncConnectionPool
+            from psycopg.rows import dict_row
 
+        try:
             _pool = AsyncConnectionPool(
                 DSN,
                 min_size=2,
@@ -66,12 +74,32 @@ async def get_connection():
     async with pool.connection() as conn:
         yield conn
 
+def retry_db(func):
+    from functools import wraps
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        for attempt in range(3):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                # Catch PostgreSQL connection disconnects or drops
+                if "OperationalError" in type(e).__name__ or "InterfaceError" in type(e).__name__ or "Connection" in type(e).__name__:
+                    logger.warning(f"[DB] Connection error in {func.__name__} (attempt {attempt+1}): {e}")
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(0.5)
+                else:
+                    raise
+    return wrapper
+
+@retry_db
 async def execute_query(query: str, *args) -> str:
     """Execute a query without returning results."""
     async with get_connection() as conn:
         await conn.execute(query, args)
         return "OK"
 
+@retry_db
 async def fetch_all(query: str, *args) -> List[Dict[str, Any]]:
     """Execute a query and return all rows as dictionaries."""
     async with get_connection() as conn:
@@ -79,6 +107,7 @@ async def fetch_all(query: str, *args) -> List[Dict[str, Any]]:
         rows = await cursor.fetchall()
         return rows
 
+@retry_db
 async def fetch_one(query: str, *args) -> Optional[Dict[str, Any]]:
     """Execute a query and return a single row as dictionary."""
     async with get_connection() as conn:
@@ -86,6 +115,7 @@ async def fetch_one(query: str, *args) -> Optional[Dict[str, Any]]:
         row = await cursor.fetchone()
         return row
 
+@retry_db
 async def fetch_val(query: str, *args) -> Any:
     """Execute a query and return a single value."""
     async with get_connection() as conn:
@@ -239,24 +269,39 @@ async def get_uploads_by_patient(patient_id: str) -> List[Dict]:
 
 async def get_system_metrics() -> Dict:
     """Get global system metrics including message processing stats."""
-    total_patients = await fetch_val("SELECT COUNT(*) FROM users")
-    total_events = await fetch_val("SELECT COUNT(*) FROM clinical_events")
-    total_uploads = await fetch_val("SELECT COUNT(*) FROM uploads")
+    total_patients = await fetch_val("SELECT COUNT(*) FROM users") or 0
     
-    msg_stats = await fetch_one("""
-        SELECT 
-            (SELECT COUNT(*) FROM raw_messages) as total_messages,
-            (SELECT COUNT(*) FROM datapoints) as total_datapoints,
-            (SELECT COUNT(*) FROM datapoints WHERE nlp_level > 0) as nlp_processed
-    """)
+    # These tables may not exist yet
+    total_events = 0
+    total_uploads = 0
+    total_messages = 0
+    total_datapoints = 0
+    nlp_processed = 0
+    
+    try:
+        total_events = await fetch_val("SELECT COUNT(*) FROM clinical_events") or 0
+    except Exception:
+        pass
+    try:
+        total_uploads = await fetch_val("SELECT COUNT(*) FROM uploads") or 0
+    except Exception:
+        pass
+    try:
+        total_messages = await fetch_val("SELECT COUNT(*) FROM raw_messages") or 0
+    except Exception:
+        pass
+    try:
+        total_datapoints = await fetch_val("SELECT COUNT(*) FROM datapoints") or 0
+    except Exception:
+        pass
     
     return {
-        "total_patients": total_patients or 0,
-        "total_events": total_events or 0,
-        "total_uploads": total_uploads or 0,
-        "total_messages": msg_stats["total_messages"] or 0,
-        "total_datapoints": msg_stats["total_datapoints"] or 0,
-        "nlp_processed": msg_stats["nlp_processed"] or 0
+        "total_patients": total_patients,
+        "total_events": total_events,
+        "total_uploads": total_uploads,
+        "total_messages": total_messages,
+        "total_datapoints": total_datapoints,
+        "nlp_processed": nlp_processed
     }
 
 # ============================================================================
@@ -284,6 +329,7 @@ async def count_raw_messages(patient_id: str) -> int:
     """Count raw messages for a patient."""
     return await fetch_val("SELECT COUNT(*) FROM raw_messages WHERE patient_id = %s", patient_id) or 0
 
+@retry_db
 async def batch_store_raw_messages(patient_id: str, messages: List[dict]):
     """Store multiple messages efficiently."""
     import hashlib
@@ -458,6 +504,40 @@ async def get_unprocessed_messages(patient_id: str, limit: int = 500) -> List[Di
         patient_id, limit
     )
 
+async def get_device_secret(device_id_hash: str) -> Optional[str]:
+    """Get device secret for signature verification."""
+    result = await fetch_one("SELECT secret FROM devices WHERE device_id_hash = %s", device_id_hash)
+    return result["secret"] if result else None
+
+async def store_device_datapoint(data: Dict, quality_score: float) -> Optional[Dict]:
+    """Store telemetry datapoint from device matching API Gateway schema."""
+    from psycopg.types.json import Json
+    from datetime import datetime
+    
+    # We use source='device' or similar as a default to differentiate from whatsapp data
+    source_hash = data.get('source_hash', data['device_id_hash'] + str(data['timestamp'].timestamp()))
+    
+    return await fetch_one(
+        """
+        INSERT INTO datapoints (
+            time, user_id_hash, device_id_hash, embedding_encrypted, 
+            embedding_dim, numeric_features, 
+            data_quality_score, source, source_hash
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (time, user_id_hash) DO NOTHING
+        RETURNING *
+        """,
+        data['timestamp'],
+        data['user_id_hash'],
+        data['device_id_hash'],
+        data['embedding']['embedding_encrypted'],
+        data['embedding']['embedding_dim'],
+        Json(data['numeric_features']),
+        quality_score,
+        data.get('source', 'device'),
+        source_hash
+    )
+
 async def store_datapoint(data: Dict) -> Dict:
     """Store a single datapoint (feature vector extracted from a message)."""
     from psycopg.types.json import Json
@@ -469,7 +549,7 @@ async def store_datapoint(data: Dict) -> Dict:
             user_id_hash, time, source, source_hash, numeric_features, nlp_level
         )
         VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (time, user_id_hash, source_hash) DO UPDATE SET
+        ON CONFLICT (time, user_id_hash) DO UPDATE SET
             numeric_features = EXCLUDED.numeric_features,
             nlp_level = EXCLUDED.nlp_level
         RETURNING *
@@ -482,6 +562,7 @@ async def store_datapoint(data: Dict) -> Dict:
         data.get('nlp_level', 0)
     )
 
+@retry_db
 async def batch_store_datapoints(datapoints: List[Dict]) -> int:
     """Store multiple datapoints efficiently."""
     from psycopg.types.json import Json
@@ -508,7 +589,7 @@ async def batch_store_datapoints(datapoints: List[Dict]) -> int:
                 """
                 INSERT INTO datapoints (user_id_hash, time, source, source_hash, numeric_features, nlp_level)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (time, user_id_hash, source_hash) DO UPDATE SET
+                ON CONFLICT (time, user_id_hash) DO UPDATE SET
                     numeric_features = EXCLUDED.numeric_features,
                     source = EXCLUDED.source,
                     nlp_level = EXCLUDED.nlp_level

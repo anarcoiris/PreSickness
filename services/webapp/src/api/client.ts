@@ -195,8 +195,8 @@ export const authApi = {
     getProfile: () =>
         api.get('/api/patients/me'),
 
-    loginWithGoogle: (code: string, role: string = 'patient') =>
-        api.post('/api/auth/google', { code, role }),
+    loginWithGoogle: (code: string, role: string = 'patient', redirect_uri: string = 'postmessage') =>
+        api.post('/api/auth/google', { code, role, redirect_uri }),
 };
 
 // Prediction API

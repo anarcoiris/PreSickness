@@ -3,6 +3,9 @@ import hashlib
 import time
 import numpy as np
 import os
+import httpx
+import json
+import re
 from typing import Dict, List, Tuple
 
 try:
@@ -49,30 +52,57 @@ class NlpEngine:
 
     def predict_heads(self, embedding: List[float], text: str) -> Dict[str, Dict]:
         """
-        Predicts symptom scores using ONNX heads if available.
+        Predicts symptom scores using local Ollama LLM if available, otherwise dummy.
         """
         symptoms = ["pain", "fatigue", "anxiety", "mood", "sleep"]
         
-        if self.heads_session:
-            try:
-                # Prepare input
-                input_data = np.array([embedding], dtype=np.float32)
-                # Run inference
-                outputs = self.heads_session.run(None, {"embeddings": input_data})
+        # OLLAMA INTEGRATION
+        ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+        ollama_model = os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
+        
+        prompt = f"""Analyze the following patient message and determine the probability (0.0 to 1.0) of the patient experiencing each of these 5 symptoms: pain, fatigue, anxiety, mood, sleep.
+Return ONLY a valid JSON object with the symptom names as keys and the probabilities as float values. No explanations.
+Message: "{text}"
+JSON:"""
+
+        try:
+            # We use format: "json" to coerce ollama models (especially llama3/mistral) to output valid JSON
+            logger.info(f"Querying Ollama ({ollama_model}) for symptom extraction...")
+            req = httpx.post(
+                f"{ollama_url}/api/generate",
+                json={"model": ollama_model, "prompt": prompt, "stream": False, "format": "json"},
+                timeout=45.0
+            )
+            if req.status_code == 200:
+                response_text = req.json().get("response", "")
                 
-                # outputs is a list of arrays (one per symptom)
+                # Remove <think> blocks (Deepseek-R1 creates these)
+                clean_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
+                
+                # Attempt to find JSON
+                match = re.search(r'\{.*\}', clean_text, flags=re.DOTALL)
+                if match:
+                    parsed_json = json.loads(match.group(0))
+                else:
+                    parsed_json = json.loads(clean_text)
+                
                 results = {}
-                for i, name in enumerate(symptoms):
-                    prob = float(outputs[i][0][0])
-                    logit = float(np.log(prob / (1 - prob + 1e-9)))
-                    results[name] = {
+                for sym in symptoms:
+                    prob = float(parsed_json.get(sym, 0.0))
+                    prob = max(0.0001, min(0.9999, prob)) # Clamp
+                    logit = float(np.log(prob / (1 - prob)))
+                    results[sym] = {
                         "prob": round(prob, 4),
                         "logit": round(logit, 4),
-                        "uncertainty": 0.1 # Placeholder: ONNX heads could output aleatoric uncertainty
+                        "uncertainty": 0.1
                     }
+                logger.info(f"Ollama extracted symptoms successfully.")
                 return results
-            except Exception as e:
-                logger.error(f"Inference error: {e}")
+                
+        except Exception as e:
+            logger.error(f"Ollama inference error: {e}")
+            
+        logger.warning("Ollama API failed. Falling back to dummy logic.")
         
         # Fallback to Dummy logic
         h = int(hashlib.md5(text.encode()).hexdigest(), 16)

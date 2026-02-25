@@ -41,13 +41,13 @@ stop_all.bat
 ### Opción 2: Manual
 
 ```bash
-# 1. Iniciar containers Docker
-docker start em_postgres em_redis mlflow
+# 1. Iniciar containers Docker de Infraestructura
+docker-compose up -d postgres redis redpanda minio mlflow
 
-# 2. Iniciar servicios
+# 2. Iniciar servicios nativos
 cd services/nlp-agent && python main.py
 cd services/ml-inference && python main.py
-cd services/unified_app && python main.py --port 8080
+cd services/unified_app && python main.py --port 8010
 cd services/webapp && npm run dev
 ```
 
@@ -58,8 +58,8 @@ cd services/webapp && npm run dev
 | Servicio | Puerto | URL | Descripción |
 |----------|--------|-----|-------------|
 | Frontend | 5173 | http://localhost:5173 | App React |
-| Backend API | 8080 | http://localhost:8080/docs | FastAPI + Swagger |
-| NLP Agent | 8002 | http://localhost:8002/health | Embeddings + Síntomas |
+| Backend API | 8010 | http://localhost:8010/docs | FastAPI + Swagger |
+| NLP Agent | 8002 | http://localhost:8002/health | Embeddings + Síntomas (soporta Ollama en 11434) |
 | ML Inference | 8001 | http://localhost:8001 | Modelo TFT |
 | MLflow | 5000 | http://localhost:5000 | Tracking ML |
 
@@ -93,7 +93,7 @@ PreSickness/
 ├── datos/                  # Datos crudos de pacientes
 ├── data/processed/         # Features procesados
 ├── services/
-│   ├── unified_app/       # Backend API principal (8080)
+│   ├── unified_app/       # Backend API principal (8010)
 │   ├── nlp-agent/         # Microservicio NLP (8002)
 │   ├── ml-inference/      # Microservicio ML (8001)
 │   └── webapp/            # Frontend React (5173)

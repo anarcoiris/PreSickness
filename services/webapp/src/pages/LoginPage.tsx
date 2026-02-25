@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGoogleLogin } from '@react-oauth/google';
 import { authApi } from '../api/client';
 import { Brain, Lock, Mail, AlertCircle, ChevronRight, Activity } from 'lucide-react';
+import { PrivacyPolicy } from '../components/PrivacyPolicy';
 
 export default function LoginPage() {
     const [name, setName] = useState('');
@@ -12,7 +13,42 @@ export default function LoginPage() {
     const [isRegister, setIsRegister] = useState(false);
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
     const navigate = useNavigate();
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('code');
+        if (code) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+            handleGoogleCallbackRedirect(code);
+        }
+    }, [navigate]);
+
+    const handleGoogleCallbackRedirect = async (code: string) => {
+        setIsLoading(true);
+        try {
+            const currentOrigin = window.location.origin + '/';
+            const res = await authApi.loginWithGoogle(code, role, currentOrigin);
+            localStorage.setItem('token', res.data.access_token);
+
+            const profile = await authApi.getProfile();
+            localStorage.setItem('role', profile.data.role);
+
+            if (profile.data.role === 'doctor') {
+                navigate('/doctor/dashboard');
+            } else if (profile.data.role === 'admin') {
+                navigate('/admin');
+            } else {
+                navigate('/dashboard');
+            }
+        } catch (err: any) {
+            console.error("Google Login Redirect Error", err);
+            setError('Error en la autenticación con Google mediante redirección.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     const handleGoogleLogin = useGoogleLogin({
         onSuccess: async (codeResponse) => {
@@ -20,7 +56,7 @@ export default function LoginPage() {
             setIsLoading(true);
             try {
                 // Send Authorization Code to Backend
-                const res = await authApi.loginWithGoogle(codeResponse.code, role);
+                const res = await authApi.loginWithGoogle(codeResponse.code, role, 'postmessage');
                 localStorage.setItem('token', res.data.access_token);
 
                 // Check profile to redirect correctly
@@ -45,7 +81,9 @@ export default function LoginPage() {
             setError('Fallo en el inicio de sesión con Google.');
         },
         flow: 'auth-code',
-        scope: "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email"
+        ux_mode: 'redirect',
+        redirect_uri: window.location.origin + '/',
+        scope: "openid https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email"
     });
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -249,7 +287,13 @@ export default function LoginPage() {
                     </p>
                 </div>
             </div>
-
+            {/* Legal Footer */}
+            <div className="absolute bottom-4 left-0 right-0 flex justify-center text-xs text-gray-500 gap-4" style={{ zIndex: 10 }}>
+                <span className="cursor-pointer hover:text-white" onClick={() => setIsPrivacyOpen(true)}>Aviso Legal</span>
+                <span className="cursor-pointer hover:text-white" onClick={() => setIsPrivacyOpen(true)}>Política de Privacidad</span>
+                <span>© 2026 EM-Predictor</span>
+            </div>
+            <PrivacyPolicy isOpen={isPrivacyOpen} onClose={() => setIsPrivacyOpen(false)} />
             <style>{`
                 .login-container {
                     display: flex;
@@ -498,6 +542,6 @@ export default function LoginPage() {
                 }
 
             `}</style>
-        </div>
+        </div >
     );
 }

@@ -4,7 +4,7 @@ description: Levantar todos los servicios del stack EM-Predictor
 
 # Workflow: Levantar Servicios
 
-Este workflow inicia todo el stack de microservicios para desarrollo y testing.
+Este workflow inicia todo el stack de microservicios para desarrollo y testing, apoyándose en Docker para infraestructura y procesos nativos para la lógica de negocio.
 
 ## Pasos
 
@@ -12,57 +12,43 @@ Este workflow inicia todo el stack de microservicios para desarrollo y testing.
 ### 1. Levantar infraestructura base
 
 ```powershell
-cd c:\Users\aladin\Documents\Presickness
 docker-compose up -d postgres redis minio redpanda mlflow
 ```
 
 // turbo
-### 2. Verificar salud de servicios
+### 2. Verificar salud de infraestructura
 
 ```powershell
 docker-compose ps
 docker-compose logs postgres --tail=20
 ```
 
-### 3. Levantar servicios de aplicación
+### 3. Levantar servicios nativos (Aplicación)
+
+Se recomienda encarecidamente usar el script unificado que inicializa todos los entornos virtuales y procesos automáticamente:
 
 ```powershell
-docker-compose up -d api_gateway feature_extractor ml_inference alert_manager dashboard
+.\start_all.bat
 ```
 
 ### 4. Verificar endpoints
 
 | Servicio | URL | Verificación |
 |----------|-----|--------------|
-| API Gateway | http://localhost:8000/docs | Swagger UI |
+| Unified App | http://localhost:8010/docs | Swagger UI |
 | ML Inference | http://localhost:8001/docs | Swagger UI |
-| Dashboard | http://localhost:8501 | Streamlit |
+| NLP Agent | http://localhost:8002/health | Health check |
+| Webapp | http://localhost:5173 | Interfaz Web |
 | MLflow | http://localhost:5000 | Experiments |
-| Grafana | http://localhost:3000 | Monitoring |
 
 // turbo
-### 5. Test de health check
+### 5. Test de health check unificado
 
 ```powershell
-curl http://localhost:8000/v1/health
-```
-
-## Para Desarrollo Local (sin Docker)
-
-```powershell
-# Activar venv
-.venv\Scripts\activate
-
-# API Gateway
-cd services/api-gateway
-uvicorn main:app --reload --port 8000
-
-# Dashboard
-cd services/dashboard
-streamlit run app.py
+curl http://localhost:8010/api/metrics
 ```
 
 ## Troubleshooting
 
-- Si Postgres no inicia: `docker-compose down -v && docker-compose up -d postgres`
-- Si hay conflictos de puertos: verificar con `netstat -an | findstr :8000`
+- Si Postgres o MinIO no inician: `docker-compose down -v` (CUIDADO: Borra datos) y luego `docker-compose up -d`
+- Si hay conflictos de puertos nativos: verificar con `netstat -an | findstr :8010` o matando los procesos de python desde el Administrador de Tareas.

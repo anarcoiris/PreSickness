@@ -19,7 +19,7 @@ import db
 # ------------------------------------------------------------------------------
 
 class Settings(BaseSettings):
-    secret_key: str = Field(default_factory=lambda: secrets.token_hex(32))
+    secret_key: str = Field(default="fcda10a2f58e6bd1f1a56e07ba0c1bc74e9f5dd5064f2662c1a85b67bbbbb447", env="SECRET_KEY")
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24 hours
     
@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     google_client_secret: str = "" # Set in .env
     
     upload_dir: Path = Path("uploads")
+    
+    # --- API Gateway parameters ---
+    redis_url: str = Field(default="redis://127.0.0.1:6379/0", env="REDIS_URL")
+    redis_password: Optional[str] = Field(default=None, env="REDIS_PASSWORD")
+    kafka_bootstrap_servers: Optional[str] = Field(default=None, env="KAFKA_BROKERS")
+    kafka_topic: str = Field(default="ingest.datapoints.v1")
+    encryption_key: Optional[str] = Field(default=None, env="ENCRYPTION_KEY")
+    device_token_prefix: str = Field(default="device_token")
+    allowed_clock_skew_seconds: int = Field(default=300)
+    max_payload_age_minutes: int = Field(default=60)
+    cache_ttl_seconds: int = Field(default=3600)
     
     model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
@@ -72,10 +83,12 @@ async def get_current_patient(
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         email: str = payload.get("sub")
         if email is None:
+            print(f"[DEBUG] get_current_patient: email is None in payload {payload}")
             raise credentials_exception
         
         user = await db.get_user_by_email(email)
         if user is None:
+            print(f"[DEBUG] get_current_patient: user not found for email {email}")
             raise credentials_exception
             
         # Doctor impersonation Logic
@@ -90,7 +103,11 @@ async def get_current_patient(
                 raise HTTPException(status_code=403, detail="No tienes acceso a este paciente")
                 
         return user
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
+        print(f"[DEBUG] get_current_patient: PyJWTError {type(e)} - {str(e)}")
+        raise credentials_exception
+    except Exception as e:
+        print(f"[DEBUG] get_current_patient: Unexpected exception {type(e)} - {str(e)}")
         raise credentials_exception
 
 

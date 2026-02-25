@@ -12,3 +12,7 @@ psycopg[binary]>=3.1.13
 psycopg-pool>=3.1.8
 google-auth-oauthlib>=1.0.0
 google-api-python-client>=2.100.0
+aiokafka>=0.10.0
+redis>=5.0.1
+cryptography>=41.0.7
+orjson>=3.9.15

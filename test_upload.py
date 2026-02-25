@@ -1,35 +1,18 @@
 import requests
-import time
+import os
 
-BASE = 'http://localhost:8080'
+url = "http://127.0.0.1:8010/api/events/import/confirm"
+file_path = r"c:\Users\soyko\Documents\PreSickness\datos\paciente2_whatsapp.txt"
 
-# Login as patient
-print("Logging in...")
-r = requests.post(f'{BASE}/api/auth/login', data={'username':'patient1@em.com','password':'test1234'}, timeout=30)
-if r.status_code != 200:
-    print(f"LOGIN ERROR: {r.status_code} {r.text}")
-    exit(1)
+print(f"Uploading {file_path} to {url}...")
 
-token = r.json()['access_token']
-headers = {'Authorization': f'Bearer {token}'}
-
-# Get pre-upload stats
-r = requests.get(f'{BASE}/api/events/messages/stats', headers=headers, timeout=30)
-print(f"PRE-UPLOAD STATS: {r.json()}")
-
-# Upload WhatsApp file
-print("Uploading 4MB WhatsApp file...")
-start = time.time()
-with open(r'c:\Users\soyko\Documents\PreSickness\datos\paciente1_whatsapp.txt', 'rb') as f:
-    files = {'file': ('paciente1_whatsapp.txt', f, 'text/plain')}
-    r = requests.post(f'{BASE}/api/patients/upload', files=files, headers=headers, timeout=600)
-elapsed = time.time() - start
-
-if r.status_code in [200, 201]:
-    print(f"UPLOAD SUCCESS in {elapsed:.1f}s: {r.json()}")
-else:
-    print(f"UPLOAD ERROR {r.status_code}: {r.text[:500]}")
-
-# Get post-upload stats
-r = requests.get(f'{BASE}/api/events/messages/stats', headers=headers, timeout=30)
-print(f"POST-UPLOAD STATS: {r.json()}")
+with open(file_path, "rb") as f:
+    files = {"file": ("paciente2_whatsapp.txt", f, "text/plain")}
+    data = {"user_id_hash": "tester123", "source": "whatsapp"}
+    
+    try:
+        response = requests.post(url, files=files, data=data)
+        print("Status Code:", response.status_code)
+        print("Response JSON:", response.json())
+    except Exception as e:
+        print("Request failed:", e)

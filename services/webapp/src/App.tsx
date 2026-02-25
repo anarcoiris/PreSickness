@@ -25,6 +25,7 @@ import LoginPage from './pages/LoginPage';
 import PatientsPage from './pages/PatientsPage';
 import ModelAnalysisPage from './pages/ModelAnalysisPage';
 import AdminPage from './pages/AdminPage';
+import { CookieConsent } from './components/CookieConsent';
 
 import './index.css';
 
@@ -44,7 +45,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   if (!token) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    return <Navigate to="/" state={{ from: location }} replace />;
   }
 
   return <>{children}</>;
@@ -56,7 +57,7 @@ function Sidebar() {
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('role');
-    window.location.href = '/login';
+    window.location.href = '/';
   };
 
   return (
@@ -158,7 +159,8 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <Routes>
-            <Route path="/login" element={<LoginPage />} />
+            <Route path="/login" element={<Navigate to="/" replace />} />
+            <Route path="/" element={localStorage.getItem('token') ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
 
             <Route
               path="/*"
@@ -222,6 +224,7 @@ function App() {
             />
           </Routes>
         </BrowserRouter>
+        <CookieConsent />
       </QueryClientProvider>
     </GoogleOAuthProvider>
   );
